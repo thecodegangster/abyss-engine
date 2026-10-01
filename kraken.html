@@ -1,0 +1,2276 @@
+<!DOCTYPE html>
+<html lang="en" data-kraken-mode="edit">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#143443">
+<title>Kraken</title>
+<style>
+:root {
+  --abyss: #0f2733;
+  --trench: #143443;
+  --reef: #1f4b5d;
+  --line: #2a5a6c;
+  --deep: #0a1d26;
+  --foam: #dcefe9;
+  --mist: #8fb3b8;
+  --skin: #e8607a;
+  --skin-deep: #c94862;
+  --glow: #8fe3ff;
+  --sand: #f2d6a2;
+  --code-font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (pointer: coarse) {
+  :root { --code-font: 16px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html, body { margin: 0; height: 100%; background: var(--abyss); color: var(--foam); overscroll-behavior: none; }
+body { font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; -webkit-tap-highlight-color: transparent; }
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; touch-action: manipulation; }
+:focus-visible { outline: 2px solid var(--glow); outline-offset: 2px; }
+
+#app {
+  position: fixed; left: 0; right: 0; top: 0;
+  height: var(--app-h, 100%);
+  display: flex; flex-direction: column;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* top bar */
+.bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--trench); border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 750; font-size: 18px; margin-right: auto; color: var(--foam); }
+.brand svg { color: var(--skin); flex: none; }
+.views { display: none; background: var(--deep); border-radius: 999px; padding: 3px; }
+.views button { padding: 6px 14px; border-radius: 999px; color: var(--mist); font-weight: 600; font-size: 14px; }
+.views button[aria-selected="true"] { background: var(--reef); color: var(--foam); }
+.btn { height: 36px; padding: 0 14px; border-radius: 10px; background: var(--reef); font-weight: 650; font-size: 14px; }
+.btn:hover { background: #275a6e; }
+.run { background: var(--skin); color: #fff; padding: 0 18px; }
+.run:hover { background: #ef6f88; }
+.run:active { background: var(--skin-deep); }
+.menu-wrap { position: relative; }
+.menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: 260px;
+  background: var(--trench); border: 1px solid var(--line); border-radius: 12px; padding: 6px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .35);
+}
+.menu button { display: block; width: 100%; text-align: left; padding: 9px 10px; border-radius: 8px; font-weight: 600; font-size: 14px; }
+.menu button:hover, .menu button:focus-visible { background: var(--reef); }
+.menu small { display: block; font-weight: 400; color: var(--mist); font-size: 12.5px; margin-top: 1px; }
+
+/* error */
+#error { background: #3a1622; border-bottom: 1px solid var(--skin); }
+#errorText { display: block; width: 100%; text-align: left; padding: 8px 14px; color: #ffd6de; font-size: 14px; }
+#errorText b { color: #fff; }
+
+/* layout */
+.main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.stage-pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--deep); }
+.stage-wrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+#screen { display: block; touch-action: none; border-radius: 6px; background: #000; box-shadow: 0 0 0 1px var(--line); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.log { margin: 0; max-height: 7.5em; overflow: auto; padding: 6px 12px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--mist); border-top: 1px solid var(--line); white-space: pre-wrap; }
+.log:empty { display: none; }
+
+.code-pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-left: 1px solid var(--line); }
+.tabs { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button { flex: none; padding: 8px 14px; border-radius: 8px 8px 0 0; color: var(--mist); font-weight: 600; font-size: 14px; }
+.tabs button[aria-selected="true"] { background: var(--deep); color: var(--foam); }
+
+.editor { flex: 1; min-height: 0; display: flex; background: var(--deep); overflow: hidden; }
+.gutter {
+  margin: 0; padding: 12px 8px 40vh 8px; min-width: 3.2em; text-align: right; flex: none;
+  color: #4f7a86; font: var(--code-font); user-select: none; -webkit-user-select: none; overflow: hidden; white-space: pre;
+}
+.gutter .bad { color: #fff; background: var(--skin); border-radius: 4px; padding: 0 3px; }
+.code-area { position: relative; flex: 1; min-width: 0; }
+.hl, #code {
+  position: absolute; inset: 0; margin: 0; border: 0;
+  padding: 12px 16px 40vh 6px;
+  font: var(--code-font); font-variant-ligatures: none; letter-spacing: 0; word-spacing: 0; tab-size: 2;
+  white-space: pre; overflow: auto;
+}
+.hl { pointer-events: none; color: var(--foam); overflow: hidden; }
+#code {
+  width: 100%; height: 100%;
+  background: transparent; color: transparent; -webkit-text-fill-color: transparent;
+  caret-color: var(--skin); resize: none; outline: none; overflow-wrap: normal;
+}
+#code::selection { background: rgba(143, 227, 255, .28); }
+.t-com { color: #5f8a95; font-style: italic; }
+.t-str { color: var(--sand); }
+.t-fn { color: var(--glow); font-weight: 600; }
+.t-if { color: #ffb86b; font-weight: 700; }
+.t-loop { color: #c9a2ff; font-weight: 700; }
+.t-var { color: #9ef0c0; }
+.t-num { color: #ff9fb2; }
+.t-kw { color: var(--skin); }
+.t-br { color: var(--mist); }
+
+.help { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px 40px; background: var(--deep); }
+.help > * { max-width: 68ch; }
+.help h3 { font-size: 15.5px; margin: 22px 0 6px; color: var(--glow); }
+.help h3:first-child { margin-top: 4px; }
+.help p { margin: 6px 0; color: var(--foam); }
+.help code { font: 13.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--abyss); padding: 1px 5px; border-radius: 4px; color: var(--sand); white-space: nowrap; }
+.help .muted { color: var(--mist); }
+
+/* the tentacle: suckers shrink toward the tip */
+.suckers {
+  display: flex; align-items: center; gap: 7px; padding: 8px 12px;
+  overflow-x: auto; background: var(--trench); border-top: 1px solid var(--line);
+  scrollbar-width: none;
+}
+.suckers::-webkit-scrollbar { display: none; }
+.suckers button {
+  flex: none; width: var(--s); height: var(--s); border-radius: 50%;
+  font: 650 17px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--foam);
+  background: radial-gradient(circle at 50% 50%, var(--deep) 0 52%, var(--reef) 56% 100%);
+  box-shadow: inset 0 0 0 2px rgba(232, 96, 122, .45);
+  user-select: none; -webkit-user-select: none;
+}
+.suckers button:active { background: radial-gradient(circle at 50% 50%, #5a2433 0 52%, var(--skin-deep) 56% 100%); }
+
+.toast {
+  position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  max-width: min(92vw, 420px); background: var(--foam); color: var(--deep);
+  padding: 10px 16px; border-radius: 12px; font-weight: 600; font-size: 14px; z-index: 30;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+}
+
+@media (max-width: 820px) {
+  .views { display: flex; }
+  .main { grid-template-columns: minmax(0, 1fr); }
+  .main[data-view="play"] .code-pane { display: none; }
+  .main[data-view="code"] .stage-pane { display: none; }
+  .code-pane { border-left: 0; }
+  .btn { padding: 0 12px; }
+  .tabs button { padding: 8px 11px; }
+}
+@media (max-width: 400px) {
+  .brand span { display: none; }
+}
+
+/* exported games: just the game */
+html[data-kraken-mode="play"] .bar,
+html[data-kraken-mode="play"] .code-pane,
+html[data-kraken-mode="play"] .log { display: none !important; }
+html[data-kraken-mode="play"] .main { grid-template-columns: minmax(0, 1fr); }
+html[data-kraken-mode="play"] .stage-pane { display: flex !important; background: #000; }
+html[data-kraken-mode="play"] #screen { border-radius: 0; box-shadow: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="bar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 4 L11 20 Q10.4 26 5 25.5"/>
+        <path d="M22 4 L20 20 Q19.6 26.5 25.5 26.5"/>
+        <path d="M6 11 H27"/>
+        <path d="M5 18.5 H26"/>
+      </svg>
+      <span>Kraken</span>
+    </div>
+    <div class="views" role="tablist" aria-label="View">
+      <button role="tab" data-view="play" aria-selected="true">Play</button>
+      <button role="tab" data-view="code" aria-selected="false">Code</button>
+    </div>
+    <button id="runBtn" class="btn run" title="Run (Ctrl+Enter)">Run</button>
+    <div class="menu-wrap">
+      <button id="fileBtn" class="btn" aria-haspopup="true" aria-expanded="false">File</button>
+      <div id="fileMenu" class="menu" hidden>
+        <button data-act="save">Save Kraken<small>Downloads Kraken with your edits built in</small></button>
+        <button data-act="export">Export game<small>Downloads just your game as one HTML file</small></button>
+        <button data-act="revert">Undo all edits<small>Goes back to the code this file started with</small></button>
+      </div>
+    </div>
+  </header>
+  <div id="error" role="alert" hidden><button id="errorText"></button></div>
+  <main id="main" class="main" data-view="play">
+    <section class="stage-pane">
+      <div id="stageWrap" class="stage-wrap"><canvas id="screen" width="320" height="240"></canvas></div>
+      <pre id="log" class="log" aria-label="Printed output"></pre>
+    </section>
+    <section class="code-pane">
+      <div class="tabs" role="tablist" aria-label="Files">
+        <button role="tab" data-tab="game" aria-selected="true">Game</button>
+        <button role="tab" data-tab="engine" aria-selected="false">Engine</button>
+        <button role="tab" data-tab="compiler" aria-selected="false">Compiler</button>
+        <button role="tab" data-tab="help" aria-selected="false">Help</button>
+      </div>
+      <div id="editor" class="editor">
+        <pre id="gutter" class="gutter" aria-hidden="true"></pre>
+        <div class="code-area">
+          <pre id="hl" class="hl" aria-hidden="true"></pre>
+          <textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off" aria-label="Hash code"></textarea>
+        </div>
+      </div>
+      <div id="help" class="help" hidden>
+        <h3>Make Kraken yours</h3>
+        <p>Kraken and Hash are made to be changed. The point isn't to use them exactly as they came, it's to edit them until they feel like yours. Every person's Kraken ends up different, because every person reshapes their own: the engine, the compiler, and the language itself.</p>
+        <p>If something bugs you, change it. Don't like how the gamepad looks? Edit the Engine tab. Want a friendlier error message, or a shorter way to write something? Edit the Compiler tab. Think a symbol should work differently, or the language needs a feature it doesn't have? You're allowed to change that too. Nothing in here is off limits, and nobody needs to ask permission.</p>
+        <p>You don't need to be scared of breaking it. A mistake shows an error with the line to fix. A broken compiler is rejected, so the old one keeps running. Save Kraken refuses to save a copy that can't start. And Undo all edits in the File menu puts back the code this file started with. Try things, make a mess, and change it again.</p>
+        <p>When you like what you've built, File &gt; Save Kraken downloads your own version of Kraken, with every change built in. Save a copy before you use Undo all edits if there are changes you want to keep.</p>
+
+        <h3>Hash in four symbols</h3>
+        <p><code>#name[ ]</code> makes a function, and <code>#name(a, b)[ ]</code> gives it inputs. <code>#[ ]</code> and <code>#(x)[ ]</code> are functions with no name, for passing into other functions.</p>
+        <p><code>{x} = 5</code> makes a variable, and <code>x = 6</code> changes it.</p>
+        <p><code>@(test)[ ... ]</code> runs code when the test is true. Add a second body for "otherwise": <code>@(test)[ yes ][ no ]</code>.</p>
+        <p><code>%(10)[ ... ]</code> repeats 10 times, and <code>%(10, i)[ ... ]</code> counts <code>i</code> from 0 to 9. <code>%(list, item)[ ... ]</code> goes through a list, and <code>%(test)[ ... ]</code> repeats while the test is true.</p>
+        <p>Calling a function never uses <code>#</code>: write <code>move(3)</code>. Lines starting with <code>//</code> are notes that Kraken skips.</p>
+
+        <h3>Functions inside functions</h3>
+        <p>The last line of a function is its result, so <code>#double(n)[ mul(n, 2) ]</code> gives back twice <code>n</code>.</p>
+        <p>Inner functions can use and change the variables around them. Ending a function with <code>me</code> hands back everything inside it, so <code>enemy(5)</code> can make a fresh enemy that you use as <code>e.x</code> or <code>e.move()</code>.</p>
+
+        <h3>Your game</h3>
+        <p><code>#init</code> runs once when the game starts, and <code>#update</code> runs 60 times a second. The screen is 320 by 240 unless you call <code>screen(w, h)</code> in <code>#init</code>.</p>
+
+        <h3>Controls</h3>
+        <p><code>keyDown("left")</code> is true while a button is held. The buttons are <code>"left"</code>, <code>"right"</code>, <code>"up"</code>, <code>"down"</code>, <code>"a"</code> and <code>"b"</code>. On a keyboard they are the arrow keys or WASD, Space or Z for A, and X for B. On phones, an on-screen pad appears.</p>
+        <p><code>keyPressed(name)</code> is true only on the frame a button goes down. For tap games, use <code>touching()</code>, <code>touchX()</code>, <code>touchY()</code> or <code>touches()</code>, and call <code>gamepad(false)</code> to hide the pad.</p>
+
+        <h3>Built-in functions</h3>
+        <p><span class="muted">Math:</span> <code>add</code> <code>sub</code> <code>mul</code> <code>div</code> <code>mod</code> <code>min</code> <code>max</code> <code>abs</code> <code>floor</code> <code>ceil</code> <code>round</code> <code>sqrt</code> <code>pow</code> <code>sin</code> <code>cos</code> <code>atan2</code> <code>pi()</code> <code>random(lo, hi)</code></p>
+        <p><span class="muted">Compare and logic:</span> <code>eq</code> <code>neq</code> <code>lt</code> <code>gt</code> <code>lte</code> <code>gte</code> <code>and</code> <code>or</code> <code>not</code></p>
+        <p><span class="muted">Text:</span> <code>join(a, b, ...)</code> <code>text(x)</code> <code>number(t)</code> <code>size(t)</code></p>
+        <p><span class="muted">Lists:</span> <code>list(...)</code> <code>get(l, i)</code> <code>put(l, i, v)</code> <code>push(l, v)</code> <code>pop(l)</code> <code>remove(l, v)</code> <code>removeAt(l, i)</code> <code>has(l, v)</code> <code>keep(l, #(x)[ test ])</code> <code>size(l)</code></p>
+        <p><span class="muted">Drawing:</span> <code>clear(color)</code> <code>drawRect(x, y, w, h, color)</code> <code>drawCircle(x, y, r, color)</code> <code>drawLine(x1, y1, x2, y2, color, width)</code> <code>drawText(t, x, y, color, size)</code> <code>textWidth(t, size)</code> <code>screen(w, h)</code> <code>screenWidth()</code> <code>screenHeight()</code></p>
+        <p><span class="muted">Other:</span> <code>print(...)</code> shows values under the game, and <code>time()</code> gives seconds since the game started.</p>
+        <p><span class="muted">From the engine:</span> <code>every(frames, #[ ])</code> <code>after(frames, #[ ])</code> <code>clamp(v, lo, hi)</code> <code>distance(x1, y1, x2, y2)</code> <code>overlap(...)</code> <code>drawCenteredText(...)</code> <code>gamepad(on)</code> <code>frameCount</code></p>
+        <p><span class="muted">For engine code:</span> <code>padSpace()</code> <code>usePadSpace(on)</code> <code>clipToGame(on)</code> <code>press(name, on)</code> <code>isTouch()</code></p>
+
+        <h3>Editing Kraken itself</h3>
+        <p>The Engine tab is Kraken's own code, written in Hash. It runs the main loop, timers and the phone gamepad, and everything it makes is available to your game. Change it and press Run to try your version.</p>
+        <p>The Compiler tab is the Hash compiler, also written in Hash. It turns all Hash code into JavaScript, including its own code. When you change it and press Run, Kraken rebuilds the compiler with itself twice and only switches to your version if both builds come out exactly the same. If something goes wrong, the old compiler keeps running.</p>
+        <p><span class="muted">Extra built-ins the compiler uses:</span> <code>slice(t, a, b)</code> <code>lower(t)</code> <code>upper(t)</code> <code>map()</code> <code>keys(m)</code> <code>joinList(l, sep)</code> <code>quote(t)</code> <code>fail(message, file, line, col)</code> <code>builtins()</code>. <code>get</code>, <code>put</code>, <code>has</code> and <code>size</code> work on maps too.</p>
+        <p>Your edits are kept in this browser automatically. File &gt; Save Kraken downloads a new copy of Kraken with your edits built in, and it only saves when everything runs, so a broken edit can't stop the saved copy from starting.</p>
+      </div>
+      <div id="suckers" class="suckers" aria-label="Insert symbols"></div>
+    </section>
+  </main>
+  <div id="toast" class="toast" role="status" hidden></div>
+</div>
+
+<script type="text/hash" id="hash-engine">
+// Kraken engine, written in Hash.
+// This is Kraken's own code. Change it and press Run to try it.
+// File > Save Kraken keeps your improved engine for good.
+
+// ---------- Helpers games can use ----------
+
+#clamp(v, lo, hi)[ min(max(v, lo), hi) ]
+
+#distance(x1, y1, x2, y2)[
+  {dx} = sub(x2, x1)
+  {dy} = sub(y2, y1)
+  sqrt(add(mul(dx, dx), mul(dy, dy)))
+]
+
+#overlap(ax, ay, aw, ah, bx, by, bw, bh)[
+  and(lt(ax, add(bx, bw)), lt(bx, add(ax, aw)), lt(ay, add(by, bh)), lt(by, add(ay, ah)))
+]
+
+#drawCenteredText(t, x, y, color, size)[
+  @(not(size))[ size = 12 ]
+  {w} = textWidth(t, size)
+  drawText(t, sub(x, div(w, 2)), sub(y, div(size, 2)), color, size)
+]
+
+// ---------- Timers ----------
+
+{timers} = list()
+
+#timer(frames, action, repeats)[
+  {left} = frames
+  {done} = false
+  #tick[
+    left = sub(left, 1)
+    @(lte(left, 0))[
+      action()
+      @(repeats)[ left = frames ][ done = true ]
+    ]
+  ]
+  me
+]
+
+// Run an action every so many frames (60 frames is 1 second).
+#every(frames, action)[ push(timers, timer(frames, action, true)) ]
+
+// Run an action once, after so many frames.
+#after(frames, action)[ push(timers, timer(frames, action, false)) ]
+
+// ---------- On-screen gamepad for phones ----------
+
+{padOn} = true
+
+// Games can call gamepad(false) to hide it, for example in tap games.
+#gamepad(on)[
+  padOn = on
+  usePadSpace(on)
+]
+
+#padButton(name, label, x, y, r)[
+  #held[
+    {on} = false
+    %(touches(), t)[
+      @(lt(distance(t.x, t.y, x, y), mul(r, 1.3)))[ on = true ]
+    ]
+    on
+  ]
+  me
+]
+
+#padButtons[
+  {w} = screenWidth()
+  {h} = screenHeight()
+  {space} = padSpace()
+  {r} = div(min(w, h), 11)
+  {cy} = sub(h, mul(r, 2.7))
+  // On tall phone screens Kraken leaves room under the game for the pad.
+  @(gt(space, 0))[
+    r = min(div(w, 12), div(space, 5.6))
+    cy = add(h, div(space, 2))
+  ]
+  {cx} = mul(r, 2.7)
+  {gap} = mul(r, 1.6)
+  list(
+    padButton("left", "◀", sub(cx, gap), cy, r),
+    padButton("right", "▶", add(cx, gap), cy, r),
+    padButton("up", "▲", cx, sub(cy, gap), r),
+    padButton("down", "▼", cx, add(cy, gap), r),
+    padButton("a", "A", sub(w, mul(r, 1.8)), sub(cy, mul(r, 0.6)), r),
+    padButton("b", "B", sub(w, mul(r, 4.1)), add(cy, mul(r, 0.7)), r)
+  )
+]
+
+#padVisible[ and(padOn, isTouch()) ]
+
+#padInput[
+  @(padVisible())[
+    %(padButtons(), b)[ press(b.name, b.held()) ]
+  ][
+    %(padButtons(), b)[ press(b.name, false) ]
+  ]
+]
+
+#padDraw[
+  @(padVisible())[
+    @(gt(padSpace(), 0))[
+      drawRect(0, screenHeight(), screenWidth(), padSpace(), "#0a1d26")
+    ]
+    %(padButtons(), b)[
+      @(keyDown(b.name))[
+        drawCircle(b.x, b.y, b.r, "rgba(255, 255, 255, 0.35)")
+      ][
+        drawCircle(b.x, b.y, b.r, "rgba(255, 255, 255, 0.14)")
+      ]
+      drawCenteredText(b.label, b.x, b.y, "rgba(255, 255, 255, 0.85)", div(b.r, 1.3))
+    ]
+  ]
+]
+
+// ---------- Main loop ----------
+// Kraken calls #start once when a game runs,
+// then #frame 60 times a second.
+
+{frameCount} = 0
+
+#start[
+  @(game.init)[ game.init() ]
+]
+
+#frame[
+  frameCount = add(frameCount, 1)
+  padInput()
+  %(timers, t)[ t.tick() ]
+  timers = keep(timers, #(t)[ not(t.done) ])
+  clipToGame(true)
+  @(game.update)[ game.update() ]
+  clipToGame(false)
+  padDraw()
+]
+</script>
+
+<script type="text/hash" id="hash-game">
+// Kraken Dodge, a tiny game written in Hash.
+// Move with the arrow keys or the on-screen pad, and dodge the blocks.
+
+{px} = 150
+{score} = 0
+{best} = 0
+{alive} = true
+{enemies} = list()
+
+#enemy(startX, speed)[
+  {x} = startX
+  {y} = -16
+  #move[ y = add(y, speed) ]
+  #draw[ drawRect(x, y, 16, 16, "#ff6f8a") ]
+  #gone[ gt(y, screenHeight()) ]
+  me
+]
+
+#restart[
+  px = 150
+  score = 0
+  alive = true
+  enemies = list()
+]
+
+#init[
+  screen(320, 240)
+  every(30, #[
+    @(alive)[
+      push(enemies, enemy(random(0, 304), add(1.5, div(score, 600))))
+    ]
+  ])
+]
+
+#update[
+  clear("#0f2733")
+  @(alive)[
+    @(keyDown("left"))[ px = sub(px, 3) ]
+    @(keyDown("right"))[ px = add(px, 3) ]
+    px = clamp(px, 0, 300)
+    score = add(score, 1)
+    %(enemies, e)[
+      e.move()
+      @(overlap(px, 210, 20, 20, e.x, e.y, 16, 16))[
+        alive = false
+        best = max(best, score)
+      ]
+    ]
+    enemies = keep(enemies, #(e)[ not(e.gone()) ])
+  ]
+  %(enemies, e)[ e.draw() ]
+  drawRect(px, 210, 20, 20, "#8fe3ff")
+  drawText(join("Score ", score, "   Best ", best), 8, 8, "#dcefe9", 12)
+  @(not(alive))[
+    drawCenteredText("Game over", 160, 100, "#ffffff", 24)
+    drawCenteredText("Press A or Space to play again", 160, 132, "#8fb3b8", 11)
+    @(keyPressed("a"))[ restart() ]
+  ]
+]
+</script>
+
+<script type="text/hash" id="hash-compiler">
+// The Hash compiler, written in Hash.
+// Kraken turns all Hash code into JavaScript with this file, including
+// this file itself. Change it and press Run: Kraken rebuilds the
+// compiler with itself twice and only switches over if both builds match.
+
+// ---------- Characters ----------
+
+{DIGITS} = "0123456789"
+{NAME_START} = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+{NAME_CHARS} = join(NAME_START, DIGITS)
+{SYMBOLS} = "#@%{}[](),.="
+
+#charIn(set, ch)[ and(neq(ch, ""), has(set, ch)) ]
+
+{CHAR_HINTS} = map()
+put(CHAR_HINTS, "+", "Hash does math with functions: use add(a, b) instead of +.")
+put(CHAR_HINTS, "-", "Use sub(a, b) instead of -.")
+put(CHAR_HINTS, "*", "Use mul(a, b) instead of *.")
+put(CHAR_HINTS, "/", "Use div(a, b) instead of /. Notes start with //.")
+put(CHAR_HINTS, "<", "Use lt(a, b) instead of <.")
+put(CHAR_HINTS, ">", "Use gt(a, b) instead of >.")
+put(CHAR_HINTS, "!", "Use not(x) instead of !.")
+put(CHAR_HINTS, "&", "Use and(a, b) instead of &&.")
+put(CHAR_HINTS, "|", "Use or(a, b) instead of ||.")
+put(CHAR_HINTS, ";", "Hash doesn't need ; just start a new line.")
+put(CHAR_HINTS, ":", "Hash doesn't use : here.")
+put(CHAR_HINTS, "'", "Text uses double quotes, like \"hello\".")
+
+// ---------- Lexer: text to tokens ----------
+
+#token(type, value, line, col, nl)[ me ]
+
+#lex(src, file)[
+  {toks} = list()
+  {pos} = 0
+  {n} = size(src)
+  {line} = 1
+  {lineStart} = 0
+  {nl} = true
+
+  #charAt(i)[ slice(src, i, add(i, 1)) ]
+  #here[ charAt(pos) ]
+  #col[ add(sub(pos, lineStart), 1) ]
+  #failAt(msg, c)[ fail(msg, file, line, c) ]
+
+  #addToken(type, value, c)[
+    push(toks, token(type, value, line, c, nl))
+    nl = false
+  ]
+
+  #newLine[
+    pos = add(pos, 1)
+    line = add(line, 1)
+    lineStart = pos
+    nl = true
+  ]
+
+  #skipNote[
+    %(and(lt(pos, n), neq(here(), "\n")))[ pos = add(pos, 1) ]
+  ]
+
+  #skipDigits[
+    %(charIn(DIGITS, here()))[ pos = add(pos, 1) ]
+  ]
+
+  #lexNumber[
+    {c} = col()
+    {start} = pos
+    @(eq(here(), "-"))[ pos = add(pos, 1) ]
+    skipDigits()
+    @(and(eq(here(), "."), charIn(DIGITS, charAt(add(pos, 1)))))[
+      pos = add(pos, 1)
+      skipDigits()
+    ]
+    @(charIn(NAME_START, here()))[ failAt("Names can't start with a number.", c) ]
+    addToken("num", slice(src, start, pos), c)
+  ]
+
+  #lexName[
+    {c} = col()
+    {start} = pos
+    %(charIn(NAME_CHARS, here()))[ pos = add(pos, 1) ]
+    {w} = slice(src, start, pos)
+    @(or(eq(w, "true"), eq(w, "false"), eq(w, "me")))[
+      addToken("kw", w, c)
+    ][
+      addToken("id", w, c)
+    ]
+  ]
+
+  #lexText[
+    {c} = col()
+    {out} = ""
+    {open} = true
+    pos = add(pos, 1)
+    %(open)[
+      {ch} = here()
+      @(or(eq(ch, ""), eq(ch, "\n")))[ failAt("This text is missing its closing \".", c) ]
+      @(eq(ch, "\""))[
+        pos = add(pos, 1)
+        open = false
+      ][ @(eq(ch, "\\"))[
+        {e} = charAt(add(pos, 1))
+        @(eq(e, "n"))[ out = join(out, "\n") ][
+        @(eq(e, "t"))[ out = join(out, "\t") ][
+        @(eq(e, "r"))[ out = join(out, "\r") ][
+          out = join(out, e)
+        ]]]
+        pos = add(pos, 2)
+      ][
+        out = join(out, ch)
+        pos = add(pos, 1)
+      ]]
+    ]
+    addToken("str", out, c)
+  ]
+
+  #badChar(ch)[
+    @(has(CHAR_HINTS, ch))[ failAt(get(CHAR_HINTS, ch), col()) ]
+    failAt(join("Kraken doesn't understand \"", ch, "\" here."), col())
+  ]
+
+  %(lt(pos, n))[
+    {ch} = here()
+    @(eq(ch, "\n"))[ newLine() ][
+    @(or(eq(ch, " "), eq(ch, "\t"), eq(ch, "\r")))[ pos = add(pos, 1) ][
+    @(and(eq(ch, "/"), eq(charAt(add(pos, 1)), "/")))[ skipNote() ][
+    @(or(charIn(DIGITS, ch), and(eq(ch, "-"), charIn(DIGITS, charAt(add(pos, 1))))))[ lexNumber() ][
+    @(charIn(NAME_START, ch))[ lexName() ][
+    @(eq(ch, "\""))[ lexText() ][
+    @(charIn(SYMBOLS, ch))[
+      addToken("sym", ch, col())
+      pos = add(pos, 1)
+    ][
+      badChar(ch)
+    ]]]]]]]
+  ]
+  push(toks, token("eof", "", line, col(), true))
+  toks
+]
+
+// ---------- Parser: tokens to a tree ----------
+
+#node(k, t)[
+  {nd} = map()
+  nd.k = k
+  nd.line = t.line
+  nd.col = t.col
+  nd
+]
+
+#parse(toks, file)[
+  {p} = 0
+  {last} = sub(size(toks), 1)
+
+  #peek(o)[ get(toks, min(add(p, o), last)) ]
+
+  #next[
+    {t} = peek(0)
+    p = add(p, 1)
+    t
+  ]
+
+  #isSym(v)[
+    {t} = peek(0)
+    and(eq(t.type, "sym"), eq(t.value, v))
+  ]
+
+  #describe(t)[
+    @(eq(t.type, "eof"))[ "the end of the code" ][
+    @(eq(t.type, "str"))[ "some text" ][
+      join("\"", t.value, "\"")
+    ]]
+  ]
+
+  #failAt(msg, t)[ fail(msg, file, t.line, t.col) ]
+  #failHere(msg)[ failAt(msg, peek(0)) ]
+
+  #expectSym(v, msg)[
+    @(not(isSym(v)))[
+      @(not(msg))[ msg = join("Expected \"", v, "\" but found ", describe(peek(0)), ".") ]
+      failHere(msg)
+    ]
+    next()
+  ]
+
+  #expectName(msg)[
+    @(neq(peek(0).type, "id"))[ failHere(msg) ]
+    next()
+  ]
+
+  #block(msg)[
+    {open} = expectSym("[", msg)
+    {body} = list()
+    %(not(isSym("]")))[
+      @(eq(peek(0).type, "eof"))[ failAt(join("The [ on line ", open.line, " is never closed with ]."), open) ]
+      push(body, statement())
+    ]
+    next()
+    body
+  ]
+
+  #params[
+    expectSym("(")
+    {ps} = list()
+    @(not(isSym(")")))[
+      {more} = true
+      %(more)[
+        push(ps, expectName("Inputs must be names, like #move(dx, dy)[ ].").value)
+        @(isSym(","))[ next() ][ more = false ]
+      ]
+    ]
+    expectSym(")", "Missing ) after the inputs.")
+    ps
+  ]
+
+  // ----- statements -----
+
+  #declStatement(t)[
+    next()
+    {name} = expectName("Put a name inside { }, like {score} = 0.")
+    expectSym("}", join("Missing } after {", name.value, "."))
+    {s} = node("decl", t)
+    s.name = name.value
+    s.value = false
+    @(isSym("="))[
+      next()
+      s.value = expr()
+    ]
+    s
+  ]
+
+  #fnStatement(t)[
+    next()
+    {name} = next()
+    {s} = node("fn", t)
+    s.name = name.value
+    s.params = list()
+    @(isSym("("))[ s.params = params() ]
+    @(not(isSym("[")))[ failHere(join("#", name.value, " needs a body in [ ], like #", name.value, "[ ... ].")) ]
+    s.body = block()
+    s
+  ]
+
+  #ifStatement(t)[
+    next()
+    expectSym("(", "@ needs a test in ( ), like @(keyDown(\"left\"))[ ... ].")
+    {s} = node("if", t)
+    s.cond = expr()
+    expectSym(")", "Missing ) after the @ test.")
+    s.then = block("@(...) needs a body in [ ].")
+    s.els = false
+    @(isSym("["))[ s.els = block() ]
+    s
+  ]
+
+  #loopStatement(t)[
+    next()
+    expectSym("(", "% needs something to loop over in ( ), like %(10)[ ... ].")
+    {s} = node("loop", t)
+    s.over = expr()
+    s.name = false
+    @(isSym(","))[
+      next()
+      s.name = expectName("After the comma, name the loop variable, like %(enemies, e).").value
+    ]
+    expectSym(")", "Missing ) after the % loop.")
+    s.body = block("%(...) needs a body in [ ].")
+    s
+  ]
+
+  #exprStatement(t)[
+    {e} = expr()
+    @(isSym("="))[
+      @(and(neq(e.k, "id"), neq(e.k, "member")))[ failHere("Only a name can go on the left of =.") ]
+      next()
+      {s} = node("assign", t)
+      s.target = e
+      s.value = expr()
+      s
+    ][
+      {s} = node("expr", t)
+      s.e = e
+      s
+    ]
+  ]
+
+  #statement[
+    {t} = peek(0)
+    @(isSym("{"))[ declStatement(t) ][
+    @(and(isSym("#"), eq(peek(1).type, "id")))[ fnStatement(t) ][
+    @(isSym("@"))[ ifStatement(t) ][
+    @(isSym("%"))[ loopStatement(t) ][
+    @(isSym("]"))[ failHere("There's an extra ] here with no [ to close.") ][
+      exprStatement(t)
+    ]]]]]
+  ]
+
+  // ----- expressions -----
+
+  #valueNode(k, t)[
+    next()
+    {e} = node(k, t)
+    e.v = t.value
+    e
+  ]
+
+  #wordNode(t)[
+    next()
+    @(eq(t.value, "me"))[ node("me", t) ][
+      {e} = node("bool", t)
+      e.v = eq(t.value, "true")
+      e
+    ]
+  ]
+
+  #nameNode(t)[
+    next()
+    {e} = node("id", t)
+    e.name = t.value
+    e
+  ]
+
+  #lambda(t)[
+    next()
+    @(eq(peek(0).type, "id"))[ failHere("Named functions like #name[ ] go on their own line. Inside other code, use #[ ] or #(x)[ ].") ]
+    {e} = node("lambda", t)
+    e.params = list()
+    @(isSym("("))[ e.params = params() ]
+    e.body = block("# needs a body in [ ].")
+    e
+  ]
+
+  #group[
+    next()
+    {e} = expr()
+    expectSym(")", "Missing ).")
+    e
+  ]
+
+  #primary[
+    {t} = peek(0)
+    @(eq(t.type, "num"))[ valueNode("num", t) ][
+    @(eq(t.type, "str"))[ valueNode("str", t) ][
+    @(eq(t.type, "kw"))[ wordNode(t) ][
+    @(eq(t.type, "id"))[ nameNode(t) ][
+    @(isSym("#"))[ lambda(t) ][
+    @(isSym("("))[ group() ][
+    @(or(isSym("@"), isSym("%")))[ failHere(join(t.value, " starts its own line and can't go inside other code.")) ][
+    @(isSym("="))[ failHere("There's nothing on the left of this =.") ][
+    @(isSym("]"))[ failHere("There's an extra ] here with no [ to close.") ][
+    @(eq(t.type, "eof"))[ failHere("The code ends too early, so something is unfinished.") ][
+      failHere(join("Kraken didn't expect ", describe(t), " here."))
+    ]]]]]]]]]]
+  ]
+
+  #callArgs(fnExpr)[
+    {open} = next()
+    {args} = list()
+    @(not(isSym(")")))[
+      {going} = true
+      %(going)[
+        @(eq(peek(0).type, "eof"))[ failAt(join("The ( on line ", open.line, " is never closed with )."), open) ]
+        push(args, expr())
+        @(isSym(","))[ next() ][
+        @(isSym(")"))[ going = false ][
+          failHere(join("Missing , or ) between the inputs (found ", describe(peek(0)), ")."))
+        ]]
+      ]
+    ]
+    next()
+    {c} = node("call", open)
+    c.fn = fnExpr
+    c.args = args
+    c
+  ]
+
+  #expr[
+    {e} = primary()
+    {more} = true
+    %(more)[
+      @(isSym("."))[
+        next()
+        {nm} = expectName("After a dot, write a name, like player.x.")
+        {m} = node("member", nm)
+        m.obj = e
+        m.name = nm.value
+        e = m
+      ][ @(and(isSym("("), not(peek(0).nl)))[
+        e = callArgs(e)
+      ][
+        more = false
+      ]]
+    ]
+    e
+  ]
+
+  {prog} = list()
+  %(neq(peek(0).type, "eof"))[ push(prog, statement()) ]
+  prog
+]
+
+// ---------- Scopes: which names exist where ----------
+
+#scope(parent, kind)[
+  {names} = map()
+  me
+]
+
+#findName(s, n)[
+  {found} = false
+  %(and(s, not(found)))[
+    @(has(s.names, n))[ found = get(s.names, n) ][ s = s.parent ]
+  ]
+  found
+]
+
+#ownerScope(s)[
+  %(eq(s.kind, "block"))[ s = s.parent ]
+  s
+]
+
+#allNames(s)[
+  {out} = list()
+  %(and(s))[
+    %(keys(s.names), k)[
+      @(not(has(out, k)))[ push(out, k) ]
+    ]
+    s = s.parent
+  ]
+  out
+]
+
+#info(kind, line)[
+  {i} = map()
+  i.kind = kind
+  i.line = line
+  i
+]
+
+// How many single-letter changes turn a into b (used for "Did you mean").
+#editDistance(a, b)[
+  {la} = size(a)
+  {lb} = size(b)
+  {d} = list()
+  %(add(la, 1), i)[
+    {row} = list()
+    %(add(lb, 1), j)[
+      @(eq(i, 0))[ push(row, j) ][ @(eq(j, 0))[ push(row, i) ][ push(row, 0) ] ]
+    ]
+    push(d, row)
+  ]
+  %(la, ii)[
+    {i} = add(ii, 1)
+    %(lb, jj)[
+      {j} = add(jj, 1)
+      {ca} = slice(a, ii, i)
+      {cb} = slice(b, jj, j)
+      {cost} = 1
+      @(eq(lower(ca), lower(cb)))[ cost = 0 ]
+      {v} = min(add(get(get(d, ii), j), 1), add(get(get(d, i), jj), 1), add(get(get(d, ii), jj), cost))
+      @(and(gt(i, 1), gt(j, 1), eq(ca, slice(b, sub(jj, 1), jj)), eq(slice(a, sub(ii, 1), ii), cb)))[
+        v = min(v, add(get(get(d, sub(i, 2)), sub(j, 2)), 1))
+      ]
+      put(get(d, i), j, v)
+    ]
+  ]
+  get(get(d, la), lb)
+]
+
+{WORD_HINTS} = map()
+put(WORD_HINTS, "if", "Hash uses @(test)[ ... ] instead of if.")
+put(WORD_HINTS, "else", "For \"otherwise\", add a second [ ] after @(test)[ ].")
+put(WORD_HINTS, "for", "Hash loops use %(10)[ ... ] or %(list, item)[ ... ].")
+put(WORD_HINTS, "while", "Hash repeats with %(test)[ ... ].")
+put(WORD_HINTS, "function", "Make functions with #name[ ... ].")
+put(WORD_HINTS, "def", "Make functions with #name[ ... ].")
+put(WORD_HINTS, "fn", "Make functions with #name[ ... ].")
+put(WORD_HINTS, "let", "Make variables with {name} = value.")
+put(WORD_HINTS, "var", "Make variables with {name} = value.")
+put(WORD_HINTS, "const", "Make variables with {name} = value.")
+put(WORD_HINTS, "return", "The last line of a function is its result, so no return is needed.")
+put(WORD_HINTS, "this", "Use me to hand back a function's insides.")
+put(WORD_HINTS, "self", "Use me to hand back a function's insides.")
+
+// ---------- Code generator: tree to JavaScript ----------
+
+#mangle(n)[ join("h_", n) ]
+
+#mangleAll(ns)[
+  {out} = list()
+  %(ns, n)[ push(out, mangle(n)) ]
+  out
+]
+
+#meCode(names)[
+  {parts} = list()
+  %(names, n)[
+    {m} = mangle(n)
+    push(parts, join(quote(n), ":[()=>", m, ",$x=>{", m, "=$x}]"))
+  ]
+  join("$K.me({", joinList(parts, ","), "})")
+]
+
+// Numbers are copied as written, minus leading zeros JavaScript dislikes.
+#numberCode(t)[
+  {neg} = eq(slice(t, 0, 1), "-")
+  @(neg)[ t = slice(t, 1, size(t)) ]
+  %(and(gt(size(t), 1), eq(slice(t, 0, 1), "0"), neq(slice(t, 1, 2), ".")))[ t = slice(t, 1, size(t)) ]
+  @(neg)[ join("(-", t, ")") ][ t ]
+]
+
+#generator(file, base, uid)[
+  #failAt(msg, nd)[
+    {l} = nd.line
+    {c} = nd.col
+    @(not(l))[ l = 1 ]
+    @(not(c))[ c = 1 ]
+    fail(msg, file, l, c)
+  ]
+
+  #declare(sc, name, kind, nd)[
+    @(has(sc.names, name))[
+      {prev} = get(sc.names, name)
+      @(eq(prev.kind, "game"))[ failAt("\"game\" is a special name in the engine. Pick another name.", nd) ]
+      @(eq(prev.kind, "param"))[ failAt(join("\"", name, "\" is already an input of this function. Pick another name."), nd) ]
+      failAt(join("There's already something called \"", name, "\" here (line ", prev.line, "). To change it, write ", name, " = ... without the { }."), nd)
+    ]
+    put(sc.names, name, info(kind, nd.line))
+  ]
+
+  #suggest(name, sc)[
+    {best} = false
+    {bestD} = 3
+    {limit} = max(1, floor(div(size(name), 3)))
+    %(allNames(sc), n)[
+      {d} = editDistance(name, n)
+      @(and(lt(d, bestD), lte(d, limit)))[
+        best = n
+        bestD = d
+      ]
+    ]
+    best
+  ]
+
+  #unknown(name, sc, nd)[
+    @(has(WORD_HINTS, name))[ failAt(get(WORD_HINTS, name), nd) ]
+    {best} = suggest(name, sc)
+    @(best)[
+      failAt(join("Kraken doesn't know \"", name, "\". Did you mean \"", best, "\"?"), nd)
+    ][
+      failAt(join("Kraken doesn't know \"", name, "\". Make it first with {", name, "} = ... or #", name, "[ ... ]."), nd)
+    ]
+  ]
+
+  #mark(s)[ join("$K.L=", add(base, s.line), ";") ]
+
+  #body(stmts, sc, tail)[
+    %(stmts, s)[
+      @(eq(s.k, "decl"))[ declare(sc, s.name, "var", s) ]
+      @(eq(s.k, "fn"))[ declare(sc, s.name, "fn", s) ]
+    ]
+    {parts} = list()
+    {lastI} = sub(size(stmts), 1)
+    %(size(stmts), i)[
+      push(parts, stmt(get(stmts, i), sc, and(tail, eq(i, lastI))))
+    ]
+    joinList(parts, "\n")
+  ]
+
+  #fnBody(ps, stmts, sc, nd)[
+    {fs} = scope(sc, "fn")
+    %(ps, p)[ declare(fs, p, "param", nd) ]
+    body(stmts, fs, true)
+  ]
+
+  #ifCode(s, sc, tail)[
+    {c} = ex(s.cond, sc)
+    {t} = body(s.then, scope(sc, "block"), tail)
+    {code} = join(mark(s), "if(", c, "){", t, "}")
+    @(s.els)[
+      code = join(code, "else{", body(s.els, scope(sc, "block"), tail), "}")
+    ]
+    code
+  ]
+
+  #loopCode(s, sc)[
+    {n} = uid.n
+    uid.n = add(n, 1)
+    {over} = ex(s.over, sc)
+    {bs} = scope(sc, "block")
+    @(s.name)[ declare(bs, s.name, "var", s) ]
+    {b} = body(s.body, bs, false)
+    {vn} = join("$v", n)
+    {it} = join("$i", n)
+    {named} = ""
+    @(s.name)[ named = join("let ", mangle(s.name), "=", vn, ";") ]
+    join(mark(s), "for(const ", it, "=$K.loop(()=>(", over, "));;){const ", vn, "=", it, "();if(", vn, "===$K.END)break;", named, b, "}")
+  ]
+
+  #assignCode(s, sc)[
+    {t} = s.target
+    @(eq(t.k, "id"))[
+      {found} = findName(sc, t.name)
+      @(not(found))[
+        {best} = suggest(t.name, sc)
+        @(best)[
+          failAt(join("\"", t.name, "\" doesn't exist. Did you mean \"", best, "\"?"), t)
+        ][
+          failAt(join("\"", t.name, "\" doesn't exist yet. To make it, write {", t.name, "} = ..."), t)
+        ]
+      ]
+      @(eq(found.kind, "builtin"))[ failAt(join("\"", t.name, "\" is built into Kraken and can't be changed. Use a different name for your own."), t) ]
+      @(eq(found.kind, "game"))[ failAt("\"game\" can't be changed.", t) ]
+      join(mark(s), mangle(t.name), "=", ex(s.value, sc), ";")
+    ][
+      join(mark(s), ex(t.obj, sc), ".", t.name, "=", ex(s.value, sc), ";")
+    ]
+  ]
+
+  #stmt(s, sc, tail)[
+    {k} = s.k
+    @(eq(k, "decl"))[
+      {v} = "undefined"
+      @(s.value)[ v = ex(s.value, sc) ]
+      join(mark(s), "let ", mangle(s.name), "=", v, ";")
+    ][ @(eq(k, "fn"))[
+      join("function ", mangle(s.name), "(", joinList(mangleAll(s.params), ","), "){", fnBody(s.params, s.body, sc, s), "}")
+    ][ @(eq(k, "if"))[ ifCode(s, sc, tail) ][
+    @(eq(k, "loop"))[ loopCode(s, sc) ][
+    @(eq(k, "assign"))[ assignCode(s, sc) ][
+    @(eq(k, "expr"))[
+      {r} = ""
+      @(tail)[ r = "return " ]
+      join(mark(s), r, ex(s.e, sc), ";")
+    ][
+      ""
+    ]]]]]]
+  ]
+
+  #meFor(sc)[
+    {o} = ownerScope(sc)
+    {names} = list()
+    %(keys(o.names), n)[
+      {kind} = get(o.names, n).kind
+      @(and(neq(kind, "game"), neq(kind, "builtin")))[ push(names, n) ]
+    ]
+    meCode(names)
+  ]
+
+  #callCode(e, sc)[
+    {f} = ex(e.fn, sc)
+    {args} = list()
+    %(e.args, a)[ push(args, ex(a, sc)) ]
+    join(f, "(", joinList(args, ","), ")")
+  ]
+
+  #memberCode(e, sc)[
+    {o} = ex(e.obj, sc)
+    @(eq(e.obj.k, "num"))[ o = join("(", o, ")") ]
+    join(o, ".", e.name)
+  ]
+
+  #ex(e, sc)[
+    {k} = e.k
+    @(eq(k, "num"))[ numberCode(e.v) ][
+    @(eq(k, "str"))[ quote(e.v) ][
+    @(eq(k, "bool"))[ @(e.v)[ "true" ][ "false" ] ][
+    @(eq(k, "id"))[
+      @(not(findName(sc, e.name)))[ unknown(e.name, sc, e) ]
+      mangle(e.name)
+    ][ @(eq(k, "me"))[ meFor(sc) ][
+    @(eq(k, "lambda"))[
+      join("((", joinList(mangleAll(e.params), ","), ")=>{", fnBody(e.params, e.body, sc, e), "})")
+    ][ @(eq(k, "member"))[ memberCode(e, sc) ][
+    @(eq(k, "call"))[ callCode(e, sc) ][
+      "undefined"
+    ]]]]]]]]
+  ]
+
+  me
+]
+
+// ---------- Putting it together ----------
+
+#rootScope[
+  {root} = scope(false, "top")
+  %(builtins(), n)[ put(root.names, n, info("builtin", 0)) ]
+  root
+]
+
+#ownNames(sc)[
+  {out} = list()
+  %(keys(sc.names), n)[
+    @(neq(get(sc.names, n).kind, "game"))[ push(out, n) ]
+  ]
+  out
+]
+
+#header[
+  {parts} = list()
+  %(builtins(), n)[ push(parts, join(n, ":", mangle(n))) ]
+  join("\"use strict\";\nconst {", joinList(parts, ","), "}=$K.P;\n")
+]
+
+// Kraken calls this to turn the engine and the game into one program.
+#compileProgram(engineSrc, gameSrc)[
+  {progE} = parse(lex(engineSrc, "engine"), "engine")
+  {progG} = parse(lex(gameSrc, "game"), "game")
+  {uid} = map()
+  uid.n = 0
+  {eTop} = scope(rootScope(), "top")
+  put(eTop.names, "game", info("game", 0))
+  {eCode} = generator("engine", 1000000, uid).body(progE, eTop, false)
+  {gTop} = scope(eTop, "top")
+  {gCode} = generator("game", 2000000, uid).body(progG, gTop, false)
+  %(list("start", "frame"), need)[
+    {found} = false
+    @(has(eTop.names, need))[ found = get(eTop.names, need) ]
+    @(or(not(found), neq(found.kind, "fn")))[
+      fail(join("The engine needs a #", need, "[ ] function at the top level, because Kraken calls it to run games."), "engine", 1, 1)
+    ]
+  ]
+  join(header(), "return (function(){\n", eCode, "\n",
+    "const h_game=(function(){\n", gCode, "\nreturn ", meCode(ownNames(gTop)), ";})();\n",
+    "return ", meCode(ownNames(eTop)), ";})();")
+]
+
+// Kraken calls this to build a compiler, including this one.
+#compileLibrary(src, file, base)[
+  {prog} = parse(lex(src, file), file)
+  {uid} = map()
+  uid.n = 0
+  {top} = scope(rootScope(), "top")
+  {code} = generator(file, base, uid).body(prog, top, false)
+  join(header(), "return (function(){\n", code, "\nreturn ", meCode(ownNames(top)), ";})();")
+]
+</script>
+
+<script type="text/plain" id="hash-compiler-js">
+"use strict";
+const {add:h_add,sub:h_sub,mul:h_mul,div:h_div,mod:h_mod,min:h_min,max:h_max,abs:h_abs,floor:h_floor,ceil:h_ceil,round:h_round,sqrt:h_sqrt,pow:h_pow,sin:h_sin,cos:h_cos,atan2:h_atan2,pi:h_pi,random:h_random,eq:h_eq,neq:h_neq,lt:h_lt,gt:h_gt,lte:h_lte,gte:h_gte,and:h_and,or:h_or,not:h_not,join:h_join,text:h_text,number:h_number,size:h_size,slice:h_slice,lower:h_lower,upper:h_upper,quote:h_quote,list:h_list,map:h_map,keys:h_keys,get:h_get,put:h_put,push:h_push,pop:h_pop,removeAt:h_removeAt,remove:h_remove,has:h_has,joinList:h_joinList,keep:h_keep,clear:h_clear,drawRect:h_drawRect,drawCircle:h_drawCircle,drawLine:h_drawLine,drawText:h_drawText,textWidth:h_textWidth,screen:h_screen,screenWidth:h_screenWidth,screenHeight:h_screenHeight,padSpace:h_padSpace,usePadSpace:h_usePadSpace,clipToGame:h_clipToGame,keyDown:h_keyDown,keyPressed:h_keyPressed,touching:h_touching,touchX:h_touchX,touchY:h_touchY,touches:h_touches,press:h_press,isTouch:h_isTouch,print:h_print,time:h_time,fail:h_fail,builtins:h_builtins}=$K.P;
+return (function(){
+$K.L=3000008;let h_DIGITS="0123456789";
+$K.L=3000009;let h_NAME_START="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
+$K.L=3000010;let h_NAME_CHARS=h_join(h_NAME_START,h_DIGITS);
+$K.L=3000011;let h_SYMBOLS="#@%{}[](),.=";
+function h_charIn(h_set,h_ch){$K.L=3000013;return h_and(h_neq(h_ch,""),h_has(h_set,h_ch));}
+$K.L=3000015;let h_CHAR_HINTS=h_map();
+$K.L=3000016;h_put(h_CHAR_HINTS,"+","Hash does math with functions: use add(a, b) instead of +.");
+$K.L=3000017;h_put(h_CHAR_HINTS,"-","Use sub(a, b) instead of -.");
+$K.L=3000018;h_put(h_CHAR_HINTS,"*","Use mul(a, b) instead of *.");
+$K.L=3000019;h_put(h_CHAR_HINTS,"/","Use div(a, b) instead of /. Notes start with //.");
+$K.L=3000020;h_put(h_CHAR_HINTS,"<","Use lt(a, b) instead of <.");
+$K.L=3000021;h_put(h_CHAR_HINTS,">","Use gt(a, b) instead of >.");
+$K.L=3000022;h_put(h_CHAR_HINTS,"!","Use not(x) instead of !.");
+$K.L=3000023;h_put(h_CHAR_HINTS,"&","Use and(a, b) instead of &&.");
+$K.L=3000024;h_put(h_CHAR_HINTS,"|","Use or(a, b) instead of ||.");
+$K.L=3000025;h_put(h_CHAR_HINTS,";","Hash doesn't need ; just start a new line.");
+$K.L=3000026;h_put(h_CHAR_HINTS,":","Hash doesn't use : here.");
+$K.L=3000027;h_put(h_CHAR_HINTS,"'","Text uses double quotes, like \"hello\".");
+function h_token(h_type,h_value,h_line,h_col,h_nl){$K.L=3000031;return $K.me({"type":[()=>h_type,$x=>{h_type=$x}],"value":[()=>h_value,$x=>{h_value=$x}],"line":[()=>h_line,$x=>{h_line=$x}],"col":[()=>h_col,$x=>{h_col=$x}],"nl":[()=>h_nl,$x=>{h_nl=$x}]});}
+function h_lex(h_src,h_file){$K.L=3000034;let h_toks=h_list();
+$K.L=3000035;let h_pos=0;
+$K.L=3000036;let h_n=h_size(h_src);
+$K.L=3000037;let h_line=1;
+$K.L=3000038;let h_lineStart=0;
+$K.L=3000039;let h_nl=true;
+function h_charAt(h_i){$K.L=3000041;return h_slice(h_src,h_i,h_add(h_i,1));}
+function h_here(){$K.L=3000042;return h_charAt(h_pos);}
+function h_col(){$K.L=3000043;return h_add(h_sub(h_pos,h_lineStart),1);}
+function h_failAt(h_msg,h_c){$K.L=3000044;return h_fail(h_msg,h_file,h_line,h_c);}
+function h_addToken(h_type,h_value,h_c){$K.L=3000047;h_push(h_toks,h_token(h_type,h_value,h_line,h_c,h_nl));
+$K.L=3000048;h_nl=false;}
+function h_newLine(){$K.L=3000052;h_pos=h_add(h_pos,1);
+$K.L=3000053;h_line=h_add(h_line,1);
+$K.L=3000054;h_lineStart=h_pos;
+$K.L=3000055;h_nl=true;}
+function h_skipNote(){$K.L=3000059;for(const $i0=$K.loop(()=>(h_and(h_lt(h_pos,h_n),h_neq(h_here(),"\n"))));;){const $v0=$i0();if($v0===$K.END)break;$K.L=3000059;h_pos=h_add(h_pos,1);}}
+function h_skipDigits(){$K.L=3000063;for(const $i1=$K.loop(()=>(h_charIn(h_DIGITS,h_here())));;){const $v1=$i1();if($v1===$K.END)break;$K.L=3000063;h_pos=h_add(h_pos,1);}}
+function h_lexNumber(){$K.L=3000067;let h_c=h_col();
+$K.L=3000068;let h_start=h_pos;
+$K.L=3000069;if(h_eq(h_here(),"-")){$K.L=3000069;h_pos=h_add(h_pos,1);}
+$K.L=3000070;h_skipDigits();
+$K.L=3000071;if(h_and(h_eq(h_here(),"."),h_charIn(h_DIGITS,h_charAt(h_add(h_pos,1))))){$K.L=3000072;h_pos=h_add(h_pos,1);
+$K.L=3000073;h_skipDigits();}
+$K.L=3000075;if(h_charIn(h_NAME_START,h_here())){$K.L=3000075;h_failAt("Names can't start with a number.",h_c);}
+$K.L=3000076;return h_addToken("num",h_slice(h_src,h_start,h_pos),h_c);}
+function h_lexName(){$K.L=3000080;let h_c=h_col();
+$K.L=3000081;let h_start=h_pos;
+$K.L=3000082;for(const $i2=$K.loop(()=>(h_charIn(h_NAME_CHARS,h_here())));;){const $v2=$i2();if($v2===$K.END)break;$K.L=3000082;h_pos=h_add(h_pos,1);}
+$K.L=3000083;let h_w=h_slice(h_src,h_start,h_pos);
+$K.L=3000084;if(h_or(h_eq(h_w,"true"),h_eq(h_w,"false"),h_eq(h_w,"me"))){$K.L=3000085;return h_addToken("kw",h_w,h_c);}else{$K.L=3000087;return h_addToken("id",h_w,h_c);}}
+function h_lexText(){$K.L=3000092;let h_c=h_col();
+$K.L=3000093;let h_out="";
+$K.L=3000094;let h_open=true;
+$K.L=3000095;h_pos=h_add(h_pos,1);
+$K.L=3000096;for(const $i3=$K.loop(()=>(h_open));;){const $v3=$i3();if($v3===$K.END)break;$K.L=3000097;let h_ch=h_here();
+$K.L=3000098;if(h_or(h_eq(h_ch,""),h_eq(h_ch,"\n"))){$K.L=3000098;h_failAt("This text is missing its closing \".",h_c);}
+$K.L=3000099;if(h_eq(h_ch,"\"")){$K.L=3000100;h_pos=h_add(h_pos,1);
+$K.L=3000101;h_open=false;}else{$K.L=3000102;if(h_eq(h_ch,"\\")){$K.L=3000103;let h_e=h_charAt(h_add(h_pos,1));
+$K.L=3000104;if(h_eq(h_e,"n")){$K.L=3000104;h_out=h_join(h_out,"\n");}else{$K.L=3000105;if(h_eq(h_e,"t")){$K.L=3000105;h_out=h_join(h_out,"\t");}else{$K.L=3000106;if(h_eq(h_e,"r")){$K.L=3000106;h_out=h_join(h_out,"\r");}else{$K.L=3000107;h_out=h_join(h_out,h_e);}}}
+$K.L=3000109;h_pos=h_add(h_pos,2);}else{$K.L=3000111;h_out=h_join(h_out,h_ch);
+$K.L=3000112;h_pos=h_add(h_pos,1);}}}
+$K.L=3000115;return h_addToken("str",h_out,h_c);}
+function h_badChar(h_ch){$K.L=3000119;if(h_has(h_CHAR_HINTS,h_ch)){$K.L=3000119;h_failAt(h_get(h_CHAR_HINTS,h_ch),h_col());}
+$K.L=3000120;return h_failAt(h_join("Kraken doesn't understand \"",h_ch,"\" here."),h_col());}
+$K.L=3000123;for(const $i4=$K.loop(()=>(h_lt(h_pos,h_n)));;){const $v4=$i4();if($v4===$K.END)break;$K.L=3000124;let h_ch=h_here();
+$K.L=3000125;if(h_eq(h_ch,"\n")){$K.L=3000125;h_newLine();}else{$K.L=3000126;if(h_or(h_eq(h_ch," "),h_eq(h_ch,"\t"),h_eq(h_ch,"\r"))){$K.L=3000126;h_pos=h_add(h_pos,1);}else{$K.L=3000127;if(h_and(h_eq(h_ch,"/"),h_eq(h_charAt(h_add(h_pos,1)),"/"))){$K.L=3000127;h_skipNote();}else{$K.L=3000128;if(h_or(h_charIn(h_DIGITS,h_ch),h_and(h_eq(h_ch,"-"),h_charIn(h_DIGITS,h_charAt(h_add(h_pos,1)))))){$K.L=3000128;h_lexNumber();}else{$K.L=3000129;if(h_charIn(h_NAME_START,h_ch)){$K.L=3000129;h_lexName();}else{$K.L=3000130;if(h_eq(h_ch,"\"")){$K.L=3000130;h_lexText();}else{$K.L=3000131;if(h_charIn(h_SYMBOLS,h_ch)){$K.L=3000132;h_addToken("sym",h_ch,h_col());
+$K.L=3000133;h_pos=h_add(h_pos,1);}else{$K.L=3000135;h_badChar(h_ch);}}}}}}}}
+$K.L=3000138;h_push(h_toks,h_token("eof","",h_line,h_col(),true));
+$K.L=3000139;return h_toks;}
+function h_node(h_k,h_t){$K.L=3000145;let h_nd=h_map();
+$K.L=3000146;h_nd.k=h_k;
+$K.L=3000147;h_nd.line=h_t.line;
+$K.L=3000148;h_nd.col=h_t.col;
+$K.L=3000149;return h_nd;}
+function h_parse(h_toks,h_file){$K.L=3000153;let h_p=0;
+$K.L=3000154;let h_last=h_sub(h_size(h_toks),1);
+function h_peek(h_o){$K.L=3000156;return h_get(h_toks,h_min(h_add(h_p,h_o),h_last));}
+function h_next(){$K.L=3000159;let h_t=h_peek(0);
+$K.L=3000160;h_p=h_add(h_p,1);
+$K.L=3000161;return h_t;}
+function h_isSym(h_v){$K.L=3000165;let h_t=h_peek(0);
+$K.L=3000166;return h_and(h_eq(h_t.type,"sym"),h_eq(h_t.value,h_v));}
+function h_describe(h_t){$K.L=3000170;if(h_eq(h_t.type,"eof")){$K.L=3000170;return "the end of the code";}else{$K.L=3000171;if(h_eq(h_t.type,"str")){$K.L=3000171;return "some text";}else{$K.L=3000172;return h_join("\"",h_t.value,"\"");}}}
+function h_failAt(h_msg,h_t){$K.L=3000176;return h_fail(h_msg,h_file,h_t.line,h_t.col);}
+function h_failHere(h_msg){$K.L=3000177;return h_failAt(h_msg,h_peek(0));}
+function h_expectSym(h_v,h_msg){$K.L=3000180;if(h_not(h_isSym(h_v))){$K.L=3000181;if(h_not(h_msg)){$K.L=3000181;h_msg=h_join("Expected \"",h_v,"\" but found ",h_describe(h_peek(0)),".");}
+$K.L=3000182;h_failHere(h_msg);}
+$K.L=3000184;return h_next();}
+function h_expectName(h_msg){$K.L=3000188;if(h_neq(h_peek(0).type,"id")){$K.L=3000188;h_failHere(h_msg);}
+$K.L=3000189;return h_next();}
+function h_block(h_msg){$K.L=3000193;let h_open=h_expectSym("[",h_msg);
+$K.L=3000194;let h_body=h_list();
+$K.L=3000195;for(const $i5=$K.loop(()=>(h_not(h_isSym("]"))));;){const $v5=$i5();if($v5===$K.END)break;$K.L=3000196;if(h_eq(h_peek(0).type,"eof")){$K.L=3000196;h_failAt(h_join("The [ on line ",h_open.line," is never closed with ]."),h_open);}
+$K.L=3000197;h_push(h_body,h_statement());}
+$K.L=3000199;h_next();
+$K.L=3000200;return h_body;}
+function h_params(){$K.L=3000204;h_expectSym("(");
+$K.L=3000205;let h_ps=h_list();
+$K.L=3000206;if(h_not(h_isSym(")"))){$K.L=3000207;let h_more=true;
+$K.L=3000208;for(const $i6=$K.loop(()=>(h_more));;){const $v6=$i6();if($v6===$K.END)break;$K.L=3000209;h_push(h_ps,h_expectName("Inputs must be names, like #move(dx, dy)[ ].").value);
+$K.L=3000210;if(h_isSym(",")){$K.L=3000210;h_next();}else{$K.L=3000210;h_more=false;}}}
+$K.L=3000213;h_expectSym(")","Missing ) after the inputs.");
+$K.L=3000214;return h_ps;}
+function h_declStatement(h_t){$K.L=3000220;h_next();
+$K.L=3000221;let h_name=h_expectName("Put a name inside { }, like {score} = 0.");
+$K.L=3000222;h_expectSym("}",h_join("Missing } after {",h_name.value,"."));
+$K.L=3000223;let h_s=h_node("decl",h_t);
+$K.L=3000224;h_s.name=h_name.value;
+$K.L=3000225;h_s.value=false;
+$K.L=3000226;if(h_isSym("=")){$K.L=3000227;h_next();
+$K.L=3000228;h_s.value=h_expr();}
+$K.L=3000230;return h_s;}
+function h_fnStatement(h_t){$K.L=3000234;h_next();
+$K.L=3000235;let h_name=h_next();
+$K.L=3000236;let h_s=h_node("fn",h_t);
+$K.L=3000237;h_s.name=h_name.value;
+$K.L=3000238;h_s.params=h_list();
+$K.L=3000239;if(h_isSym("(")){$K.L=3000239;h_s.params=h_params();}
+$K.L=3000240;if(h_not(h_isSym("["))){$K.L=3000240;h_failHere(h_join("#",h_name.value," needs a body in [ ], like #",h_name.value,"[ ... ]."));}
+$K.L=3000241;h_s.body=h_block();
+$K.L=3000242;return h_s;}
+function h_ifStatement(h_t){$K.L=3000246;h_next();
+$K.L=3000247;h_expectSym("(","@ needs a test in ( ), like @(keyDown(\"left\"))[ ... ].");
+$K.L=3000248;let h_s=h_node("if",h_t);
+$K.L=3000249;h_s.cond=h_expr();
+$K.L=3000250;h_expectSym(")","Missing ) after the @ test.");
+$K.L=3000251;h_s.then=h_block("@(...) needs a body in [ ].");
+$K.L=3000252;h_s.els=false;
+$K.L=3000253;if(h_isSym("[")){$K.L=3000253;h_s.els=h_block();}
+$K.L=3000254;return h_s;}
+function h_loopStatement(h_t){$K.L=3000258;h_next();
+$K.L=3000259;h_expectSym("(","% needs something to loop over in ( ), like %(10)[ ... ].");
+$K.L=3000260;let h_s=h_node("loop",h_t);
+$K.L=3000261;h_s.over=h_expr();
+$K.L=3000262;h_s.name=false;
+$K.L=3000263;if(h_isSym(",")){$K.L=3000264;h_next();
+$K.L=3000265;h_s.name=h_expectName("After the comma, name the loop variable, like %(enemies, e).").value;}
+$K.L=3000267;h_expectSym(")","Missing ) after the % loop.");
+$K.L=3000268;h_s.body=h_block("%(...) needs a body in [ ].");
+$K.L=3000269;return h_s;}
+function h_exprStatement(h_t){$K.L=3000273;let h_e=h_expr();
+$K.L=3000274;if(h_isSym("=")){$K.L=3000275;if(h_and(h_neq(h_e.k,"id"),h_neq(h_e.k,"member"))){$K.L=3000275;h_failHere("Only a name can go on the left of =.");}
+$K.L=3000276;h_next();
+$K.L=3000277;let h_s=h_node("assign",h_t);
+$K.L=3000278;h_s.target=h_e;
+$K.L=3000279;h_s.value=h_expr();
+$K.L=3000280;return h_s;}else{$K.L=3000282;let h_s=h_node("expr",h_t);
+$K.L=3000283;h_s.e=h_e;
+$K.L=3000284;return h_s;}}
+function h_statement(){$K.L=3000289;let h_t=h_peek(0);
+$K.L=3000290;if(h_isSym("{")){$K.L=3000290;return h_declStatement(h_t);}else{$K.L=3000291;if(h_and(h_isSym("#"),h_eq(h_peek(1).type,"id"))){$K.L=3000291;return h_fnStatement(h_t);}else{$K.L=3000292;if(h_isSym("@")){$K.L=3000292;return h_ifStatement(h_t);}else{$K.L=3000293;if(h_isSym("%")){$K.L=3000293;return h_loopStatement(h_t);}else{$K.L=3000294;if(h_isSym("]")){$K.L=3000294;return h_failHere("There's an extra ] here with no [ to close.");}else{$K.L=3000295;return h_exprStatement(h_t);}}}}}}
+function h_valueNode(h_k,h_t){$K.L=3000302;h_next();
+$K.L=3000303;let h_e=h_node(h_k,h_t);
+$K.L=3000304;h_e.v=h_t.value;
+$K.L=3000305;return h_e;}
+function h_wordNode(h_t){$K.L=3000309;h_next();
+$K.L=3000310;if(h_eq(h_t.value,"me")){$K.L=3000310;return h_node("me",h_t);}else{$K.L=3000311;let h_e=h_node("bool",h_t);
+$K.L=3000312;h_e.v=h_eq(h_t.value,"true");
+$K.L=3000313;return h_e;}}
+function h_nameNode(h_t){$K.L=3000318;h_next();
+$K.L=3000319;let h_e=h_node("id",h_t);
+$K.L=3000320;h_e.name=h_t.value;
+$K.L=3000321;return h_e;}
+function h_lambda(h_t){$K.L=3000325;h_next();
+$K.L=3000326;if(h_eq(h_peek(0).type,"id")){$K.L=3000326;h_failHere("Named functions like #name[ ] go on their own line. Inside other code, use #[ ] or #(x)[ ].");}
+$K.L=3000327;let h_e=h_node("lambda",h_t);
+$K.L=3000328;h_e.params=h_list();
+$K.L=3000329;if(h_isSym("(")){$K.L=3000329;h_e.params=h_params();}
+$K.L=3000330;h_e.body=h_block("# needs a body in [ ].");
+$K.L=3000331;return h_e;}
+function h_group(){$K.L=3000335;h_next();
+$K.L=3000336;let h_e=h_expr();
+$K.L=3000337;h_expectSym(")","Missing ).");
+$K.L=3000338;return h_e;}
+function h_primary(){$K.L=3000342;let h_t=h_peek(0);
+$K.L=3000343;if(h_eq(h_t.type,"num")){$K.L=3000343;return h_valueNode("num",h_t);}else{$K.L=3000344;if(h_eq(h_t.type,"str")){$K.L=3000344;return h_valueNode("str",h_t);}else{$K.L=3000345;if(h_eq(h_t.type,"kw")){$K.L=3000345;return h_wordNode(h_t);}else{$K.L=3000346;if(h_eq(h_t.type,"id")){$K.L=3000346;return h_nameNode(h_t);}else{$K.L=3000347;if(h_isSym("#")){$K.L=3000347;return h_lambda(h_t);}else{$K.L=3000348;if(h_isSym("(")){$K.L=3000348;return h_group();}else{$K.L=3000349;if(h_or(h_isSym("@"),h_isSym("%"))){$K.L=3000349;return h_failHere(h_join(h_t.value," starts its own line and can't go inside other code."));}else{$K.L=3000350;if(h_isSym("=")){$K.L=3000350;return h_failHere("There's nothing on the left of this =.");}else{$K.L=3000351;if(h_isSym("]")){$K.L=3000351;return h_failHere("There's an extra ] here with no [ to close.");}else{$K.L=3000352;if(h_eq(h_t.type,"eof")){$K.L=3000352;return h_failHere("The code ends too early, so something is unfinished.");}else{$K.L=3000353;return h_failHere(h_join("Kraken didn't expect ",h_describe(h_t)," here."));}}}}}}}}}}}
+function h_callArgs(h_fnExpr){$K.L=3000358;let h_open=h_next();
+$K.L=3000359;let h_args=h_list();
+$K.L=3000360;if(h_not(h_isSym(")"))){$K.L=3000361;let h_going=true;
+$K.L=3000362;for(const $i7=$K.loop(()=>(h_going));;){const $v7=$i7();if($v7===$K.END)break;$K.L=3000363;if(h_eq(h_peek(0).type,"eof")){$K.L=3000363;h_failAt(h_join("The ( on line ",h_open.line," is never closed with )."),h_open);}
+$K.L=3000364;h_push(h_args,h_expr());
+$K.L=3000365;if(h_isSym(",")){$K.L=3000365;h_next();}else{$K.L=3000366;if(h_isSym(")")){$K.L=3000366;h_going=false;}else{$K.L=3000367;h_failHere(h_join("Missing , or ) between the inputs (found ",h_describe(h_peek(0)),")."));}}}}
+$K.L=3000371;h_next();
+$K.L=3000372;let h_c=h_node("call",h_open);
+$K.L=3000373;h_c.fn=h_fnExpr;
+$K.L=3000374;h_c.args=h_args;
+$K.L=3000375;return h_c;}
+function h_expr(){$K.L=3000379;let h_e=h_primary();
+$K.L=3000380;let h_more=true;
+$K.L=3000381;for(const $i8=$K.loop(()=>(h_more));;){const $v8=$i8();if($v8===$K.END)break;$K.L=3000382;if(h_isSym(".")){$K.L=3000383;h_next();
+$K.L=3000384;let h_nm=h_expectName("After a dot, write a name, like player.x.");
+$K.L=3000385;let h_m=h_node("member",h_nm);
+$K.L=3000386;h_m.obj=h_e;
+$K.L=3000387;h_m.name=h_nm.value;
+$K.L=3000388;h_e=h_m;}else{$K.L=3000389;if(h_and(h_isSym("("),h_not(h_peek(0).nl))){$K.L=3000390;h_e=h_callArgs(h_e);}else{$K.L=3000392;h_more=false;}}}
+$K.L=3000395;return h_e;}
+$K.L=3000398;let h_prog=h_list();
+$K.L=3000399;for(const $i9=$K.loop(()=>(h_neq(h_peek(0).type,"eof")));;){const $v9=$i9();if($v9===$K.END)break;$K.L=3000399;h_push(h_prog,h_statement());}
+$K.L=3000400;return h_prog;}
+function h_scope(h_parent,h_kind){$K.L=3000406;let h_names=h_map();
+$K.L=3000407;return $K.me({"parent":[()=>h_parent,$x=>{h_parent=$x}],"kind":[()=>h_kind,$x=>{h_kind=$x}],"names":[()=>h_names,$x=>{h_names=$x}]});}
+function h_findName(h_s,h_n){$K.L=3000411;let h_found=false;
+$K.L=3000412;for(const $i10=$K.loop(()=>(h_and(h_s,h_not(h_found))));;){const $v10=$i10();if($v10===$K.END)break;$K.L=3000413;if(h_has(h_s.names,h_n)){$K.L=3000413;h_found=h_get(h_s.names,h_n);}else{$K.L=3000413;h_s=h_s.parent;}}
+$K.L=3000415;return h_found;}
+function h_ownerScope(h_s){$K.L=3000419;for(const $i11=$K.loop(()=>(h_eq(h_s.kind,"block")));;){const $v11=$i11();if($v11===$K.END)break;$K.L=3000419;h_s=h_s.parent;}
+$K.L=3000420;return h_s;}
+function h_allNames(h_s){$K.L=3000424;let h_out=h_list();
+$K.L=3000425;for(const $i12=$K.loop(()=>(h_and(h_s)));;){const $v12=$i12();if($v12===$K.END)break;$K.L=3000426;for(const $i13=$K.loop(()=>(h_keys(h_s.names)));;){const $v13=$i13();if($v13===$K.END)break;let h_k=$v13;$K.L=3000427;if(h_not(h_has(h_out,h_k))){$K.L=3000427;h_push(h_out,h_k);}}
+$K.L=3000429;h_s=h_s.parent;}
+$K.L=3000431;return h_out;}
+function h_info(h_kind,h_line){$K.L=3000435;let h_i=h_map();
+$K.L=3000436;h_i.kind=h_kind;
+$K.L=3000437;h_i.line=h_line;
+$K.L=3000438;return h_i;}
+function h_editDistance(h_a,h_b){$K.L=3000443;let h_la=h_size(h_a);
+$K.L=3000444;let h_lb=h_size(h_b);
+$K.L=3000445;let h_d=h_list();
+$K.L=3000446;for(const $i14=$K.loop(()=>(h_add(h_la,1)));;){const $v14=$i14();if($v14===$K.END)break;let h_i=$v14;$K.L=3000447;let h_row=h_list();
+$K.L=3000448;for(const $i15=$K.loop(()=>(h_add(h_lb,1)));;){const $v15=$i15();if($v15===$K.END)break;let h_j=$v15;$K.L=3000449;if(h_eq(h_i,0)){$K.L=3000449;h_push(h_row,h_j);}else{$K.L=3000449;if(h_eq(h_j,0)){$K.L=3000449;h_push(h_row,h_i);}else{$K.L=3000449;h_push(h_row,0);}}}
+$K.L=3000451;h_push(h_d,h_row);}
+$K.L=3000453;for(const $i16=$K.loop(()=>(h_la));;){const $v16=$i16();if($v16===$K.END)break;let h_ii=$v16;$K.L=3000454;let h_i=h_add(h_ii,1);
+$K.L=3000455;for(const $i17=$K.loop(()=>(h_lb));;){const $v17=$i17();if($v17===$K.END)break;let h_jj=$v17;$K.L=3000456;let h_j=h_add(h_jj,1);
+$K.L=3000457;let h_ca=h_slice(h_a,h_ii,h_i);
+$K.L=3000458;let h_cb=h_slice(h_b,h_jj,h_j);
+$K.L=3000459;let h_cost=1;
+$K.L=3000460;if(h_eq(h_lower(h_ca),h_lower(h_cb))){$K.L=3000460;h_cost=0;}
+$K.L=3000461;let h_v=h_min(h_add(h_get(h_get(h_d,h_ii),h_j),1),h_add(h_get(h_get(h_d,h_i),h_jj),1),h_add(h_get(h_get(h_d,h_ii),h_jj),h_cost));
+$K.L=3000462;if(h_and(h_gt(h_i,1),h_gt(h_j,1),h_eq(h_ca,h_slice(h_b,h_sub(h_jj,1),h_jj)),h_eq(h_slice(h_a,h_sub(h_ii,1),h_ii),h_cb))){$K.L=3000463;h_v=h_min(h_v,h_add(h_get(h_get(h_d,h_sub(h_i,2)),h_sub(h_j,2)),1));}
+$K.L=3000465;h_put(h_get(h_d,h_i),h_j,h_v);}}
+$K.L=3000468;return h_get(h_get(h_d,h_la),h_lb);}
+$K.L=3000471;let h_WORD_HINTS=h_map();
+$K.L=3000472;h_put(h_WORD_HINTS,"if","Hash uses @(test)[ ... ] instead of if.");
+$K.L=3000473;h_put(h_WORD_HINTS,"else","For \"otherwise\", add a second [ ] after @(test)[ ].");
+$K.L=3000474;h_put(h_WORD_HINTS,"for","Hash loops use %(10)[ ... ] or %(list, item)[ ... ].");
+$K.L=3000475;h_put(h_WORD_HINTS,"while","Hash repeats with %(test)[ ... ].");
+$K.L=3000476;h_put(h_WORD_HINTS,"function","Make functions with #name[ ... ].");
+$K.L=3000477;h_put(h_WORD_HINTS,"def","Make functions with #name[ ... ].");
+$K.L=3000478;h_put(h_WORD_HINTS,"fn","Make functions with #name[ ... ].");
+$K.L=3000479;h_put(h_WORD_HINTS,"let","Make variables with {name} = value.");
+$K.L=3000480;h_put(h_WORD_HINTS,"var","Make variables with {name} = value.");
+$K.L=3000481;h_put(h_WORD_HINTS,"const","Make variables with {name} = value.");
+$K.L=3000482;h_put(h_WORD_HINTS,"return","The last line of a function is its result, so no return is needed.");
+$K.L=3000483;h_put(h_WORD_HINTS,"this","Use me to hand back a function's insides.");
+$K.L=3000484;h_put(h_WORD_HINTS,"self","Use me to hand back a function's insides.");
+function h_mangle(h_n){$K.L=3000488;return h_join("h_",h_n);}
+function h_mangleAll(h_ns){$K.L=3000491;let h_out=h_list();
+$K.L=3000492;for(const $i18=$K.loop(()=>(h_ns));;){const $v18=$i18();if($v18===$K.END)break;let h_n=$v18;$K.L=3000492;h_push(h_out,h_mangle(h_n));}
+$K.L=3000493;return h_out;}
+function h_meCode(h_names){$K.L=3000497;let h_parts=h_list();
+$K.L=3000498;for(const $i19=$K.loop(()=>(h_names));;){const $v19=$i19();if($v19===$K.END)break;let h_n=$v19;$K.L=3000499;let h_m=h_mangle(h_n);
+$K.L=3000500;h_push(h_parts,h_join(h_quote(h_n),":[()=>",h_m,",$x=>{",h_m,"=$x}]"));}
+$K.L=3000502;return h_join("$K.me({",h_joinList(h_parts,","),"})");}
+function h_numberCode(h_t){$K.L=3000507;let h_neg=h_eq(h_slice(h_t,0,1),"-");
+$K.L=3000508;if(h_neg){$K.L=3000508;h_t=h_slice(h_t,1,h_size(h_t));}
+$K.L=3000509;for(const $i20=$K.loop(()=>(h_and(h_gt(h_size(h_t),1),h_eq(h_slice(h_t,0,1),"0"),h_neq(h_slice(h_t,1,2),"."))));;){const $v20=$i20();if($v20===$K.END)break;$K.L=3000509;h_t=h_slice(h_t,1,h_size(h_t));}
+$K.L=3000510;if(h_neg){$K.L=3000510;return h_join("(-",h_t,")");}else{$K.L=3000510;return h_t;}}
+function h_generator(h_file,h_base,h_uid){function h_failAt(h_msg,h_nd){$K.L=3000515;let h_l=h_nd.line;
+$K.L=3000516;let h_c=h_nd.col;
+$K.L=3000517;if(h_not(h_l)){$K.L=3000517;h_l=1;}
+$K.L=3000518;if(h_not(h_c)){$K.L=3000518;h_c=1;}
+$K.L=3000519;return h_fail(h_msg,h_file,h_l,h_c);}
+function h_declare(h_sc,h_name,h_kind,h_nd){$K.L=3000523;if(h_has(h_sc.names,h_name)){$K.L=3000524;let h_prev=h_get(h_sc.names,h_name);
+$K.L=3000525;if(h_eq(h_prev.kind,"game")){$K.L=3000525;h_failAt("\"game\" is a special name in the engine. Pick another name.",h_nd);}
+$K.L=3000526;if(h_eq(h_prev.kind,"param")){$K.L=3000526;h_failAt(h_join("\"",h_name,"\" is already an input of this function. Pick another name."),h_nd);}
+$K.L=3000527;h_failAt(h_join("There's already something called \"",h_name,"\" here (line ",h_prev.line,"). To change it, write ",h_name," = ... without the { }."),h_nd);}
+$K.L=3000529;return h_put(h_sc.names,h_name,h_info(h_kind,h_nd.line));}
+function h_suggest(h_name,h_sc){$K.L=3000533;let h_best=false;
+$K.L=3000534;let h_bestD=3;
+$K.L=3000535;let h_limit=h_max(1,h_floor(h_div(h_size(h_name),3)));
+$K.L=3000536;for(const $i21=$K.loop(()=>(h_allNames(h_sc)));;){const $v21=$i21();if($v21===$K.END)break;let h_n=$v21;$K.L=3000537;let h_d=h_editDistance(h_name,h_n);
+$K.L=3000538;if(h_and(h_lt(h_d,h_bestD),h_lte(h_d,h_limit))){$K.L=3000539;h_best=h_n;
+$K.L=3000540;h_bestD=h_d;}}
+$K.L=3000543;return h_best;}
+function h_unknown(h_name,h_sc,h_nd){$K.L=3000547;if(h_has(h_WORD_HINTS,h_name)){$K.L=3000547;h_failAt(h_get(h_WORD_HINTS,h_name),h_nd);}
+$K.L=3000548;let h_best=h_suggest(h_name,h_sc);
+$K.L=3000549;if(h_best){$K.L=3000550;return h_failAt(h_join("Kraken doesn't know \"",h_name,"\". Did you mean \"",h_best,"\"?"),h_nd);}else{$K.L=3000552;return h_failAt(h_join("Kraken doesn't know \"",h_name,"\". Make it first with {",h_name,"} = ... or #",h_name,"[ ... ]."),h_nd);}}
+function h_mark(h_s){$K.L=3000556;return h_join("$K.L=",h_add(h_base,h_s.line),";");}
+function h_body(h_stmts,h_sc,h_tail){$K.L=3000559;for(const $i22=$K.loop(()=>(h_stmts));;){const $v22=$i22();if($v22===$K.END)break;let h_s=$v22;$K.L=3000560;if(h_eq(h_s.k,"decl")){$K.L=3000560;h_declare(h_sc,h_s.name,"var",h_s);}
+$K.L=3000561;if(h_eq(h_s.k,"fn")){$K.L=3000561;h_declare(h_sc,h_s.name,"fn",h_s);}}
+$K.L=3000563;let h_parts=h_list();
+$K.L=3000564;let h_lastI=h_sub(h_size(h_stmts),1);
+$K.L=3000565;for(const $i23=$K.loop(()=>(h_size(h_stmts)));;){const $v23=$i23();if($v23===$K.END)break;let h_i=$v23;$K.L=3000566;h_push(h_parts,h_stmt(h_get(h_stmts,h_i),h_sc,h_and(h_tail,h_eq(h_i,h_lastI))));}
+$K.L=3000568;return h_joinList(h_parts,"\n");}
+function h_fnBody(h_ps,h_stmts,h_sc,h_nd){$K.L=3000572;let h_fs=h_scope(h_sc,"fn");
+$K.L=3000573;for(const $i24=$K.loop(()=>(h_ps));;){const $v24=$i24();if($v24===$K.END)break;let h_p=$v24;$K.L=3000573;h_declare(h_fs,h_p,"param",h_nd);}
+$K.L=3000574;return h_body(h_stmts,h_fs,true);}
+function h_ifCode(h_s,h_sc,h_tail){$K.L=3000578;let h_c=h_ex(h_s.cond,h_sc);
+$K.L=3000579;let h_t=h_body(h_s.then,h_scope(h_sc,"block"),h_tail);
+$K.L=3000580;let h_code=h_join(h_mark(h_s),"if(",h_c,"){",h_t,"}");
+$K.L=3000581;if(h_s.els){$K.L=3000582;h_code=h_join(h_code,"else{",h_body(h_s.els,h_scope(h_sc,"block"),h_tail),"}");}
+$K.L=3000584;return h_code;}
+function h_loopCode(h_s,h_sc){$K.L=3000588;let h_n=h_uid.n;
+$K.L=3000589;h_uid.n=h_add(h_n,1);
+$K.L=3000590;let h_over=h_ex(h_s.over,h_sc);
+$K.L=3000591;let h_bs=h_scope(h_sc,"block");
+$K.L=3000592;if(h_s.name){$K.L=3000592;h_declare(h_bs,h_s.name,"var",h_s);}
+$K.L=3000593;let h_b=h_body(h_s.body,h_bs,false);
+$K.L=3000594;let h_vn=h_join("$v",h_n);
+$K.L=3000595;let h_it=h_join("$i",h_n);
+$K.L=3000596;let h_named="";
+$K.L=3000597;if(h_s.name){$K.L=3000597;h_named=h_join("let ",h_mangle(h_s.name),"=",h_vn,";");}
+$K.L=3000598;return h_join(h_mark(h_s),"for(const ",h_it,"=$K.loop(()=>(",h_over,"));;){const ",h_vn,"=",h_it,"();if(",h_vn,"===$K.END)break;",h_named,h_b,"}");}
+function h_assignCode(h_s,h_sc){$K.L=3000602;let h_t=h_s.target;
+$K.L=3000603;if(h_eq(h_t.k,"id")){$K.L=3000604;let h_found=h_findName(h_sc,h_t.name);
+$K.L=3000605;if(h_not(h_found)){$K.L=3000606;let h_best=h_suggest(h_t.name,h_sc);
+$K.L=3000607;if(h_best){$K.L=3000608;h_failAt(h_join("\"",h_t.name,"\" doesn't exist. Did you mean \"",h_best,"\"?"),h_t);}else{$K.L=3000610;h_failAt(h_join("\"",h_t.name,"\" doesn't exist yet. To make it, write {",h_t.name,"} = ..."),h_t);}}
+$K.L=3000613;if(h_eq(h_found.kind,"builtin")){$K.L=3000613;h_failAt(h_join("\"",h_t.name,"\" is built into Kraken and can't be changed. Use a different name for your own."),h_t);}
+$K.L=3000614;if(h_eq(h_found.kind,"game")){$K.L=3000614;h_failAt("\"game\" can't be changed.",h_t);}
+$K.L=3000615;return h_join(h_mark(h_s),h_mangle(h_t.name),"=",h_ex(h_s.value,h_sc),";");}else{$K.L=3000617;return h_join(h_mark(h_s),h_ex(h_t.obj,h_sc),".",h_t.name,"=",h_ex(h_s.value,h_sc),";");}}
+function h_stmt(h_s,h_sc,h_tail){$K.L=3000622;let h_k=h_s.k;
+$K.L=3000623;if(h_eq(h_k,"decl")){$K.L=3000624;let h_v="undefined";
+$K.L=3000625;if(h_s.value){$K.L=3000625;h_v=h_ex(h_s.value,h_sc);}
+$K.L=3000626;return h_join(h_mark(h_s),"let ",h_mangle(h_s.name),"=",h_v,";");}else{$K.L=3000627;if(h_eq(h_k,"fn")){$K.L=3000628;return h_join("function ",h_mangle(h_s.name),"(",h_joinList(h_mangleAll(h_s.params),","),"){",h_fnBody(h_s.params,h_s.body,h_sc,h_s),"}");}else{$K.L=3000629;if(h_eq(h_k,"if")){$K.L=3000629;return h_ifCode(h_s,h_sc,h_tail);}else{$K.L=3000630;if(h_eq(h_k,"loop")){$K.L=3000630;return h_loopCode(h_s,h_sc);}else{$K.L=3000631;if(h_eq(h_k,"assign")){$K.L=3000631;return h_assignCode(h_s,h_sc);}else{$K.L=3000632;if(h_eq(h_k,"expr")){$K.L=3000633;let h_r="";
+$K.L=3000634;if(h_tail){$K.L=3000634;h_r="return ";}
+$K.L=3000635;return h_join(h_mark(h_s),h_r,h_ex(h_s.e,h_sc),";");}else{$K.L=3000637;return "";}}}}}}}
+function h_meFor(h_sc){$K.L=3000642;let h_o=h_ownerScope(h_sc);
+$K.L=3000643;let h_names=h_list();
+$K.L=3000644;for(const $i25=$K.loop(()=>(h_keys(h_o.names)));;){const $v25=$i25();if($v25===$K.END)break;let h_n=$v25;$K.L=3000645;let h_kind=h_get(h_o.names,h_n).kind;
+$K.L=3000646;if(h_and(h_neq(h_kind,"game"),h_neq(h_kind,"builtin"))){$K.L=3000646;h_push(h_names,h_n);}}
+$K.L=3000648;return h_meCode(h_names);}
+function h_callCode(h_e,h_sc){$K.L=3000652;let h_f=h_ex(h_e.fn,h_sc);
+$K.L=3000653;let h_args=h_list();
+$K.L=3000654;for(const $i26=$K.loop(()=>(h_e.args));;){const $v26=$i26();if($v26===$K.END)break;let h_a=$v26;$K.L=3000654;h_push(h_args,h_ex(h_a,h_sc));}
+$K.L=3000655;return h_join(h_f,"(",h_joinList(h_args,","),")");}
+function h_memberCode(h_e,h_sc){$K.L=3000659;let h_o=h_ex(h_e.obj,h_sc);
+$K.L=3000660;if(h_eq(h_e.obj.k,"num")){$K.L=3000660;h_o=h_join("(",h_o,")");}
+$K.L=3000661;return h_join(h_o,".",h_e.name);}
+function h_ex(h_e,h_sc){$K.L=3000665;let h_k=h_e.k;
+$K.L=3000666;if(h_eq(h_k,"num")){$K.L=3000666;return h_numberCode(h_e.v);}else{$K.L=3000667;if(h_eq(h_k,"str")){$K.L=3000667;return h_quote(h_e.v);}else{$K.L=3000668;if(h_eq(h_k,"bool")){$K.L=3000668;if(h_e.v){$K.L=3000668;return "true";}else{$K.L=3000668;return "false";}}else{$K.L=3000669;if(h_eq(h_k,"id")){$K.L=3000670;if(h_not(h_findName(h_sc,h_e.name))){$K.L=3000670;h_unknown(h_e.name,h_sc,h_e);}
+$K.L=3000671;return h_mangle(h_e.name);}else{$K.L=3000672;if(h_eq(h_k,"me")){$K.L=3000672;return h_meFor(h_sc);}else{$K.L=3000673;if(h_eq(h_k,"lambda")){$K.L=3000674;return h_join("((",h_joinList(h_mangleAll(h_e.params),","),")=>{",h_fnBody(h_e.params,h_e.body,h_sc,h_e),"})");}else{$K.L=3000675;if(h_eq(h_k,"member")){$K.L=3000675;return h_memberCode(h_e,h_sc);}else{$K.L=3000676;if(h_eq(h_k,"call")){$K.L=3000676;return h_callCode(h_e,h_sc);}else{$K.L=3000677;return "undefined";}}}}}}}}}
+$K.L=3000681;return $K.me({"file":[()=>h_file,$x=>{h_file=$x}],"base":[()=>h_base,$x=>{h_base=$x}],"uid":[()=>h_uid,$x=>{h_uid=$x}],"failAt":[()=>h_failAt,$x=>{h_failAt=$x}],"declare":[()=>h_declare,$x=>{h_declare=$x}],"suggest":[()=>h_suggest,$x=>{h_suggest=$x}],"unknown":[()=>h_unknown,$x=>{h_unknown=$x}],"mark":[()=>h_mark,$x=>{h_mark=$x}],"body":[()=>h_body,$x=>{h_body=$x}],"fnBody":[()=>h_fnBody,$x=>{h_fnBody=$x}],"ifCode":[()=>h_ifCode,$x=>{h_ifCode=$x}],"loopCode":[()=>h_loopCode,$x=>{h_loopCode=$x}],"assignCode":[()=>h_assignCode,$x=>{h_assignCode=$x}],"stmt":[()=>h_stmt,$x=>{h_stmt=$x}],"meFor":[()=>h_meFor,$x=>{h_meFor=$x}],"callCode":[()=>h_callCode,$x=>{h_callCode=$x}],"memberCode":[()=>h_memberCode,$x=>{h_memberCode=$x}],"ex":[()=>h_ex,$x=>{h_ex=$x}]});}
+function h_rootScope(){$K.L=3000687;let h_root=h_scope(false,"top");
+$K.L=3000688;for(const $i27=$K.loop(()=>(h_builtins()));;){const $v27=$i27();if($v27===$K.END)break;let h_n=$v27;$K.L=3000688;h_put(h_root.names,h_n,h_info("builtin",0));}
+$K.L=3000689;return h_root;}
+function h_ownNames(h_sc){$K.L=3000693;let h_out=h_list();
+$K.L=3000694;for(const $i28=$K.loop(()=>(h_keys(h_sc.names)));;){const $v28=$i28();if($v28===$K.END)break;let h_n=$v28;$K.L=3000695;if(h_neq(h_get(h_sc.names,h_n).kind,"game")){$K.L=3000695;h_push(h_out,h_n);}}
+$K.L=3000697;return h_out;}
+function h_header(){$K.L=3000701;let h_parts=h_list();
+$K.L=3000702;for(const $i29=$K.loop(()=>(h_builtins()));;){const $v29=$i29();if($v29===$K.END)break;let h_n=$v29;$K.L=3000702;h_push(h_parts,h_join(h_n,":",h_mangle(h_n)));}
+$K.L=3000703;return h_join("\"use strict\";\nconst {",h_joinList(h_parts,","),"}=$K.P;\n");}
+function h_compileProgram(h_engineSrc,h_gameSrc){$K.L=3000708;let h_progE=h_parse(h_lex(h_engineSrc,"engine"),"engine");
+$K.L=3000709;let h_progG=h_parse(h_lex(h_gameSrc,"game"),"game");
+$K.L=3000710;let h_uid=h_map();
+$K.L=3000711;h_uid.n=0;
+$K.L=3000712;let h_eTop=h_scope(h_rootScope(),"top");
+$K.L=3000713;h_put(h_eTop.names,"game",h_info("game",0));
+$K.L=3000714;let h_eCode=h_generator("engine",1000000,h_uid).body(h_progE,h_eTop,false);
+$K.L=3000715;let h_gTop=h_scope(h_eTop,"top");
+$K.L=3000716;let h_gCode=h_generator("game",2000000,h_uid).body(h_progG,h_gTop,false);
+$K.L=3000717;for(const $i30=$K.loop(()=>(h_list("start","frame")));;){const $v30=$i30();if($v30===$K.END)break;let h_need=$v30;$K.L=3000718;let h_found=false;
+$K.L=3000719;if(h_has(h_eTop.names,h_need)){$K.L=3000719;h_found=h_get(h_eTop.names,h_need);}
+$K.L=3000720;if(h_or(h_not(h_found),h_neq(h_found.kind,"fn"))){$K.L=3000721;h_fail(h_join("The engine needs a #",h_need,"[ ] function at the top level, because Kraken calls it to run games."),"engine",1,1);}}
+$K.L=3000724;return h_join(h_header(),"return (function(){\n",h_eCode,"\n","const h_game=(function(){\n",h_gCode,"\nreturn ",h_meCode(h_ownNames(h_gTop)),";})();\n","return ",h_meCode(h_ownNames(h_eTop)),";})();");}
+function h_compileLibrary(h_src,h_file,h_base){$K.L=3000731;let h_prog=h_parse(h_lex(h_src,h_file),h_file);
+$K.L=3000732;let h_uid=h_map();
+$K.L=3000733;h_uid.n=0;
+$K.L=3000734;let h_top=h_scope(h_rootScope(),"top");
+$K.L=3000735;let h_code=h_generator(h_file,h_base,h_uid).body(h_prog,h_top,false);
+$K.L=3000736;return h_join(h_header(),"return (function(){\n",h_code,"\nreturn ",h_meCode(h_ownNames(h_top)),";})();");}
+return $K.me({"DIGITS":[()=>h_DIGITS,$x=>{h_DIGITS=$x}],"NAME_START":[()=>h_NAME_START,$x=>{h_NAME_START=$x}],"NAME_CHARS":[()=>h_NAME_CHARS,$x=>{h_NAME_CHARS=$x}],"SYMBOLS":[()=>h_SYMBOLS,$x=>{h_SYMBOLS=$x}],"charIn":[()=>h_charIn,$x=>{h_charIn=$x}],"CHAR_HINTS":[()=>h_CHAR_HINTS,$x=>{h_CHAR_HINTS=$x}],"token":[()=>h_token,$x=>{h_token=$x}],"lex":[()=>h_lex,$x=>{h_lex=$x}],"node":[()=>h_node,$x=>{h_node=$x}],"parse":[()=>h_parse,$x=>{h_parse=$x}],"scope":[()=>h_scope,$x=>{h_scope=$x}],"findName":[()=>h_findName,$x=>{h_findName=$x}],"ownerScope":[()=>h_ownerScope,$x=>{h_ownerScope=$x}],"allNames":[()=>h_allNames,$x=>{h_allNames=$x}],"info":[()=>h_info,$x=>{h_info=$x}],"editDistance":[()=>h_editDistance,$x=>{h_editDistance=$x}],"WORD_HINTS":[()=>h_WORD_HINTS,$x=>{h_WORD_HINTS=$x}],"mangle":[()=>h_mangle,$x=>{h_mangle=$x}],"mangleAll":[()=>h_mangleAll,$x=>{h_mangleAll=$x}],"meCode":[()=>h_meCode,$x=>{h_meCode=$x}],"numberCode":[()=>h_numberCode,$x=>{h_numberCode=$x}],"generator":[()=>h_generator,$x=>{h_generator=$x}],"rootScope":[()=>h_rootScope,$x=>{h_rootScope=$x}],"ownNames":[()=>h_ownNames,$x=>{h_ownNames=$x}],"header":[()=>h_header,$x=>{h_header=$x}],"compileProgram":[()=>h_compileProgram,$x=>{h_compileProgram=$x}],"compileLibrary":[()=>h_compileLibrary,$x=>{h_compileLibrary=$x}]});})();
+</script>
+
+<script id="kraken-kernel">
+(() => {
+"use strict";
+
+// Captured before anything changes the page, so saved copies start clean.
+const TEMPLATE = "<!DOCTYPE html>\n" + document.documentElement.outerHTML;
+const MODE = document.documentElement.getAttribute("data-kraken-mode") === "play" ? "play" : "edit";
+const readSrc = id => (document.getElementById(id).textContent || "").replace(/^\r?\n/, "").replace(/\s+$/, "") + "\n";
+const EMBEDDED = { engine: readSrc("hash-engine"), game: readSrc("hash-game"), compiler: readSrc("hash-compiler") };
+const EMBEDDED_COMPILER_JS = (document.getElementById("hash-compiler-js").textContent || "").replace(/^\r?\n/, "").replace(/\s+$/, "");
+
+// Errors in Hash code. The compiler (written in Hash) raises these with fail().
+class HashError extends Error {
+  constructor(msg, file, line, col) { super(msg); this.file = file; this.line = line; this.col = col; }
+}
+
+/* =====================================================================
+   Runtime: built-in functions, input, drawing, main loop
+   ===================================================================== */
+
+const canvas = document.getElementById("screen");
+const ctx = canvas.getContext("2d");
+const stageWrap = document.getElementById("stageWrap");
+const coarse = window.matchMedia ? matchMedia("(pointer: coarse)").matches : false;
+
+const RT = {
+  gw: 320, gh: 240, bs: 1,
+  kb: Object.create(null), vk: Object.create(null), prev: Object.create(null), hit: Object.create(null),
+  extra: 0, wantPad: true, clipped: false,
+  ptr: new Map(), touch: coarse || ("ontouchstart" in window && !matchMedia("(pointer: fine)").matches),
+  logs: [], logDirty: false, t0: performance.now()
+};
+
+function kindOf(v) {
+  if (v === undefined || v === null) return "nothing";
+  if (typeof v === "number") return "the number " + show(v);
+  if (typeof v === "string") return 'the text "' + v + '"';
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (Array.isArray(v)) return "a list";
+  if (typeof v === "function") return "a function";
+  return "an object";
+}
+function show(v, depth = 0) {
+  if (typeof v === "number") return String(Math.round(v * 1e6) / 1e6);
+  if (typeof v === "string") return depth ? JSON.stringify(v) : v;
+  if (v === undefined || v === null) return "nothing";
+  if (typeof v === "function") return "#function";
+  if (Array.isArray(v)) return depth > 2 ? "list(...)" : "list(" + v.map(x => show(x, depth + 1)).join(", ") + ")";
+  if (typeof v === "object") {
+    if (depth > 2) return "{...}";
+    return "{" + Object.keys(v).filter(k => typeof v[k] !== "function").map(k => k + ": " + show(v[k], depth + 1)).join(", ") + "}";
+  }
+  return String(v);
+}
+const N = (v, fn, i) => { if (typeof v !== "number") throw new Error(`${fn} needs numbers, but input ${i + 1} is ${kindOf(v)}.`); return v; };
+const Lst = (l, fn) => { if (!Array.isArray(l)) throw new Error(`${fn} needs a list, but got ${kindOf(l)}.`); return l; };
+const isMap = v => v !== null && typeof v === "object" && !Array.isArray(v);
+const Coll = (l, fn) => { if (!Array.isArray(l) && !isMap(l)) throw new Error(`${fn} needs a list or a map, but got ${kindOf(l)}.`); return l; };
+const Txt = (t, fn) => { if (typeof t !== "string") throw new Error(`${fn} needs text, but got ${kindOf(t)}.`); return t; };
+const FONT = s => `${s}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+const isDown = n => !!(RT.kb[n] || RT.vk[n]);
+
+const PRIMS = {
+  add: (...a) => { let s = 0; for (let i = 0; i < a.length; i++) s += N(a[i], "add", i); return s; },
+  sub: (a, b) => N(a, "sub", 0) - N(b, "sub", 1),
+  mul: (...a) => { let s = 1; for (let i = 0; i < a.length; i++) s *= N(a[i], "mul", i); return s; },
+  div: (a, b) => { N(a, "div", 0); N(b, "div", 1); if (b === 0) throw new Error("div tried to divide by 0."); return a / b; },
+  mod: (a, b) => { N(a, "mod", 0); N(b, "mod", 1); if (b === 0) throw new Error("mod tried to divide by 0."); return ((a % b) + b) % b; },
+  min: (...a) => Math.min(...a), max: (...a) => Math.max(...a),
+  abs: Math.abs, floor: Math.floor, ceil: Math.ceil,
+  round: (n, places = 0) => { const f = Math.pow(10, places); return Math.round(N(n, "round", 0) * f) / f; },
+  sqrt: Math.sqrt, pow: Math.pow, sin: Math.sin, cos: Math.cos, atan2: Math.atan2, pi: () => Math.PI,
+  random: (lo = 0, hi = 1) => (Number.isInteger(lo) && Number.isInteger(hi))
+    ? lo + Math.floor(Math.random() * (hi - lo + 1))
+    : lo + Math.random() * (hi - lo),
+
+  eq: (a, b) => a === b, neq: (a, b) => a !== b,
+  lt: (a, b) => a < b, gt: (a, b) => a > b, lte: (a, b) => a <= b, gte: (a, b) => a >= b,
+  and: (...a) => a.every(Boolean), or: (...a) => a.some(Boolean), not: a => !a,
+
+  join: (...a) => a.map(x => show(x)).join(""),
+  text: v => show(v),
+  number: v => { const n = parseFloat(v); return Number.isNaN(n) ? 0 : n; },
+  size: v => (v === undefined || v === null) ? 0 : isMap(v) ? Object.keys(v).length : (v.length || 0),
+  slice: (t, a, b) => { if (typeof t !== "string" && !Array.isArray(t)) throw new Error(`slice needs text or a list, but got ${kindOf(t)}.`); return t.slice(a, b); },
+  lower: t => Txt(t, "lower").toLowerCase(),
+  upper: t => Txt(t, "upper").toUpperCase(),
+  quote: t => JSON.stringify(String(t)),
+
+  list: (...a) => a,
+  map: () => Object.create(null),
+  keys: m => Object.keys(Coll(m, "keys")),
+  get: (l, i) => Coll(l, "get")[i],
+  put: (l, i, v) => { Coll(l, "put")[i] = v; return v; },
+  push: (l, v) => { Lst(l, "push").push(v); return v; },
+  pop: l => Lst(l, "pop").pop(),
+  removeAt: (l, i) => Lst(l, "removeAt").splice(i, 1)[0],
+  remove: (l, v) => { const a = Lst(l, "remove"), i = a.indexOf(v); if (i >= 0) a.splice(i, 1); return i >= 0; },
+  has: (l, v) => typeof l === "string" ? l.includes(show(v)) : isMap(l) ? (v in l) : Lst(l, "has").includes(v),
+  joinList: (l, sep = "") => Lst(l, "joinList").map(x => show(x)).join(show(sep)),
+  keep: (l, f) => Lst(l, "keep").filter(x => f(x)),
+
+  clear: (c = "#000") => { ctx.fillStyle = c; ctx.fillRect(0, 0, RT.gw, RT.gh); },
+  drawRect: (x, y, w, h, c = "#fff") => { ctx.fillStyle = c; ctx.fillRect(x, y, w, h); },
+  drawCircle: (x, y, r, c = "#fff") => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, Math.max(0, r), 0, Math.PI * 2); ctx.fill(); },
+  drawLine: (x1, y1, x2, y2, c = "#fff", w = 1) => { ctx.strokeStyle = c; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); },
+  drawText: (t, x, y, c = "#fff", s = 12) => { ctx.font = FONT(s); ctx.textBaseline = "top"; ctx.fillStyle = c; ctx.fillText(show(t), x, y); },
+  textWidth: (t, s = 12) => { ctx.font = FONT(s); return ctx.measureText(show(t)).width; },
+  screen: (w, h) => {
+    if (!(w > 0 && h > 0 && w <= 4000 && h <= 4000)) throw new Error("screen(w, h) needs two sizes between 1 and 4000.");
+    RT.gw = w; RT.gh = h; resize();
+  },
+  screenWidth: () => RT.gw, screenHeight: () => RT.gh,
+  padSpace: () => RT.extra,
+  usePadSpace: on => { const w = !!on; if (w !== RT.wantPad) { RT.wantPad = w; resize(); } },
+  clipToGame: on => {
+    if (on && !RT.clipped) { ctx.save(); ctx.beginPath(); ctx.rect(0, 0, RT.gw, RT.gh); ctx.clip(); RT.clipped = true; }
+    else if (!on && RT.clipped) { ctx.restore(); RT.clipped = false; }
+  },
+
+  keyDown: n => isDown(n),
+  keyPressed: n => !!RT.hit[n] || (isDown(n) && !RT.prev[n]),
+  touching: () => RT.ptr.size > 0,
+  touchX: () => { for (const p of RT.ptr.values()) return p.x; return 0; },
+  touchY: () => { for (const p of RT.ptr.values()) return p.y; return 0; },
+  touches: () => [...RT.ptr.values()].map(p => ({ x: p.x, y: p.y })),
+  press: (n, on) => { RT.vk[n] = !!on; },
+  isTouch: () => RT.touch,
+
+  print: (...a) => {
+    RT.logs.push(a.map(x => show(x)).join(" "));
+    if (RT.logs.length > 100) RT.logs.splice(0, RT.logs.length - 100);
+    RT.logDirty = true;
+  },
+  time: () => (performance.now() - RT.t0) / 1000,
+  fail: (msg, file, line, col) => { throw new HashError(show(msg), file || "game", line || 1, col || 1); },
+  builtins: () => PRIM_NAMES.slice()
+};
+const PRIM_NAMES = Object.keys(PRIMS);
+
+const LOOP_LIMIT = 1e6;
+const $K = {
+  L: 0,
+  END: Symbol("end"),
+  P: PRIMS,
+  me(spec) {
+    const o = {};
+    for (const k in spec) Object.defineProperty(o, k, { get: spec[k][0], set: spec[k][1], enumerable: true, configurable: true });
+    return o;
+  },
+  loop(f) {
+    let v = f(), i = 0;
+    const END = $K.END;
+    if (typeof v === "number") {
+      if (v > 1e7) throw new Error(`%(${show(v)}) is too many repeats for one frame.`);
+      const n = v;
+      return () => i < n ? i++ : END;
+    }
+    if (Array.isArray(v) || typeof v === "string") {
+      const a = Array.isArray(v) ? v.slice() : [...v];
+      return () => i < a.length ? a[i++] : END;
+    }
+    if (typeof v === "boolean") {
+      let first = true;
+      return () => {
+        if (!first) v = f();
+        first = false;
+        if (!v) return END;
+        if (++i > LOOP_LIMIT) throw new Error("This % loop ran over a million times in one frame, so Kraken stopped it. Check its test.");
+        return i - 1;
+      };
+    }
+    throw new Error(`% needs a number, a list or a true/false test, but got ${kindOf(v)}.`);
+  }
+};
+
+function resize() {
+  const w = stageWrap.clientWidth, h = stageWrap.clientHeight;
+  if (!w || !h) return;
+  const pad = MODE === "play" ? 0 : 12;
+  // On tall touch screens, leave room under the game so thumbs don't cover it.
+  const sW = (w - pad * 2) / RT.gw;
+  const room = (h - pad * 2) / sW - RT.gh;
+  RT.extra = (RT.touch && RT.wantPad && room >= RT.gh * 0.45) ? Math.floor(Math.min(room, RT.gh * 1.2)) : 0;
+  const totalH = RT.gh + RT.extra;
+  const s = Math.max(0.05, Math.min(sW, (h - pad * 2) / totalH));
+  canvas.style.width = Math.floor(RT.gw * s) + "px";
+  canvas.style.height = Math.floor(totalH * s) + "px";
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  const bs = Math.min(s * dpr, 4096 / RT.gw, 4096 / totalH);
+  RT.bs = bs;
+  canvas.width = Math.max(1, Math.round(RT.gw * bs));
+  canvas.height = Math.max(1, Math.round(totalH * bs));
+  ctx.setTransform(bs, 0, 0, bs, 0, 0);
+}
+if (window.ResizeObserver) new ResizeObserver(resize).observe(stageWrap);
+addEventListener("resize", resize);
+
+// pointer input (mouse and touch share one path)
+function toGame(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width * RT.gw, y: (e.clientY - r.top) / r.height * (RT.gh + RT.extra) };
+}
+canvas.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  const a = document.activeElement;
+  if (a && a !== document.body && a.blur) a.blur();
+  const wasTouch = RT.touch;
+  RT.touch = e.pointerType !== "mouse";
+  if (RT.touch !== wasTouch) resize();
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+  RT.ptr.set(e.pointerId, toGame(e));
+});
+canvas.addEventListener("pointermove", e => { if (RT.ptr.has(e.pointerId)) RT.ptr.set(e.pointerId, toGame(e)); });
+for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) canvas.addEventListener(ev, e => RT.ptr.delete(e.pointerId));
+for (const ev of ["touchstart", "touchmove"]) canvas.addEventListener(ev, e => e.preventDefault(), { passive: false });
+canvas.addEventListener("contextmenu", e => e.preventDefault());
+
+// keyboard input
+const KEY_BUTTONS = { arrowleft: "left", a: "left", arrowright: "right", d: "right", arrowup: "up", w: "up", arrowdown: "down", s: "down", " ": "a", z: "a", j: "a", x: "b", k: "b", enter: "start" };
+function keyNames(e) {
+  const k = (e.key || "").toLowerCase();
+  const out = [];
+  if (KEY_BUTTONS[k]) out.push(KEY_BUTTONS[k]);
+  if (!["w", "a", "s", "d"].includes(k)) out.push(k === " " ? "space" : k);
+  return out;
+}
+function releaseAll() { RT.kb = Object.create(null); RT.ptr.clear(); }
+addEventListener("blur", releaseAll);
+document.addEventListener("visibilitychange", () => { if (document.hidden) releaseAll(); });
+
+/* =====================================================================
+   Running a program
+   ===================================================================== */
+
+/* ---------- The compiler ----------
+   Kraken has no JavaScript compiler of its own. It keeps the Hash
+   compiler's source plus the JavaScript that compiler made from itself.
+   Editing the compiler rebuilds it with itself twice; the new one is
+   used only if both rebuilds match exactly. */
+
+const COMPILER_BASE = 3e6;
+function loadJS(js, what) {
+  let f;
+  try { f = new Function("$K", js); }
+  catch (e) { throw new HashError(`The compiler made ${what} that JavaScript can't read (${e.message}).`, "compiler", 1, 1); }
+  return f;
+}
+function loadCompiler(js) {
+  const c = loadJS(js, "a compiler")($K);
+  if (!c || typeof c.compileProgram !== "function" || typeof c.compileLibrary !== "function")
+    throw new HashError("The compiler needs #compileProgram and #compileLibrary functions at the top level.", "compiler", 1, 1);
+  return c;
+}
+const BUILT_IN_COMPILER = { src: EMBEDDED.compiler, js: EMBEDDED_COMPILER_JS, c: null };
+let compiler = BUILT_IN_COMPILER;
+let compilerProblem = null;
+try { BUILT_IN_COMPILER.c = loadCompiler(EMBEDDED_COMPILER_JS); }
+catch (e) { compilerProblem = e; }
+
+function rebuildCompiler(files) {
+  if (files.compiler === compiler.src) return null;
+  try {
+    $K.L = 0;
+    const js1 = compiler.c.compileLibrary(files.compiler, "compiler", COMPILER_BASE);
+    const c1 = loadCompiler(js1);
+    const js2 = c1.compileLibrary(files.compiler, "compiler", COMPILER_BASE);
+    const c2 = loadCompiler(js2);
+    const js3 = c2.compileLibrary(files.compiler, "compiler", COMPILER_BASE);
+    if (js2 !== js3)
+      throw new HashError("The new compiler built itself differently on its second try, so Kraken kept the old one. A compiler has to give the same result every time.", "compiler", 1, 1);
+    try { c2.compileProgram(files.engine, files.game); }
+    catch (e) { if (!(e instanceof HashError)) throw e; }
+    compiler = { src: files.compiler, js: js2, c: c2 };
+    return null;
+  } catch (e) {
+    const err = errorAt(e);
+    if (!(e instanceof HashError)) err.msg = "The new compiler broke while rebuilding itself, so Kraken kept the old one. " + err.msg;
+    return err;
+  }
+}
+function useBuiltInCompiler() { compiler = BUILT_IN_COMPILER; }
+function compileProgram(files) {
+  if (compilerProblem) throw compilerProblem;
+  return loadJS(compiler.c.compileProgram(files.engine, files.game), "a program");
+}
+
+let program = null, running = false;
+const STEP = 1 / 60;
+let last = performance.now(), acc = 0;
+const logEl = document.getElementById("log");
+
+function friendly(e) {
+  if (e instanceof HashError) return e.message;
+  let m = String((e && e.message) || e).replace(/\bh_(\w+)/g, "$1").replace(/\$K\.P\./g, "");
+  if (e instanceof RangeError && /call stack|too much recursion/i.test(m)) return "A function kept calling itself without stopping.";
+  m = m.replace(/Cannot read propert(?:y|ies) of (?:undefined|null) \(reading '([^']+)'\)/, "Tried to use .$1 on nothing (that thing doesn't exist).");
+  m = m.replace(/Cannot set propert(?:y|ies) of (?:undefined|null) \(setting '([^']+)'\)/, "Tried to change .$1 on nothing (that thing doesn't exist).");
+  m = m.replace(/Cannot access '(\w+)' before initialization/, '"$1" is used before the line that makes it.');
+  m = m.replace(/^(.+?) is not a function.*$/, "$1 isn't a function, so it can't be called with ( ).");
+  return m;
+}
+function errorAt(e) {
+  if (e instanceof HashError) return { file: e.file, line: e.line, msg: e.message };
+  const code = $K.L;
+  const file = code >= 3e6 ? "compiler" : code >= 2e6 ? "game" : code >= 1e6 ? "engine" : "game";
+  const line = code >= 1e6 ? code % 1e6 : 0;
+  return { file, line, msg: friendly(e) };
+}
+
+function resetRuntime() {
+  RT.gw = 320; RT.gh = 240; RT.wantPad = true; RT.clipped = false;
+  RT.vk = Object.create(null); RT.prev = Object.create(null); RT.hit = Object.create(null);
+  RT.logs = []; RT.logDirty = true; RT.t0 = performance.now();
+  acc = 0;
+  resize();
+  ctx.setTransform(RT.bs, 0, 0, RT.bs, 0, 0);
+  ctx.clearRect(0, 0, RT.gw, RT.gh);
+}
+
+function start(files) {
+  running = false;
+  const problem = rebuildCompiler(files);
+  if (problem) return problem;
+  let factory;
+  try { $K.L = 0; factory = compileProgram(files); }
+  catch (e) { return errorAt(e); }
+  resetRuntime();
+  try {
+    $K.L = 0;
+    program = factory($K);
+    ctx.setTransform(RT.bs, 0, 0, RT.bs, 0, 0);
+    program.start();
+    if (RT.clipped) { ctx.restore(); RT.clipped = false; }
+  } catch (e) { return errorAt(e); }
+  running = true;
+  return null;
+}
+
+function step() {
+  ctx.setTransform(RT.bs, 0, 0, RT.bs, 0, 0);
+  try { program.frame(); }
+  catch (e) { running = false; UI.showError(errorAt(e)); }
+  if (RT.clipped) { ctx.restore(); RT.clipped = false; }
+  const prev = Object.create(null);
+  for (const k in RT.kb) if (RT.kb[k]) prev[k] = true;
+  for (const k in RT.vk) if (RT.vk[k]) prev[k] = true;
+  RT.prev = prev;
+  RT.hit = Object.create(null);
+}
+
+function tick(now) {
+  requestAnimationFrame(tick);
+  let dt = (now - last) / 1000;
+  last = now;
+  if (dt > 0.25) dt = 0.25;
+  if (RT.logDirty && logEl) { RT.logDirty = false; logEl.textContent = RT.logs.join("\n"); logEl.scrollTop = logEl.scrollHeight; }
+  if (!running || document.hidden || !stageWrap.clientWidth) { acc = 0; return; }
+  acc += dt;
+  let n = 0;
+  while (acc >= STEP * 0.95 && n < 4 && running) { step(); acc -= STEP; n++; }
+  if (n === 4) acc = 0;
+  if (acc < -STEP) acc = -STEP;
+}
+requestAnimationFrame(tick);
+
+/* =====================================================================
+   Editor UI
+   ===================================================================== */
+
+const $ = s => document.querySelector(s);
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+const UI = (() => {
+  const app = $("#app"), main = $("#main"), ta = $("#code"), hl = $("#hl"), gutter = $("#gutter");
+  const editor = $("#editor"), help = $("#help"), suckers = $("#suckers");
+  const errorBox = $("#error"), errorText = $("#errorText"), toastEl = $("#toast");
+  const fileBtn = $("#fileBtn"), fileMenu = $("#fileMenu");
+  const narrow = () => matchMedia("(max-width: 820px)").matches;
+
+  let files = { engine: EMBEDDED.engine, game: EMBEDDED.game, compiler: EMBEDDED.compiler };
+  let tab = "game";
+  let errMark = null;
+  const freshView = () => ({ s: 0, e: 0, top: 0, left: 0 });
+  const views = { game: freshView(), engine: freshView(), compiler: freshView() };
+
+  // phones: keep the app inside the visible area when the keyboard opens
+  function fitViewport() {
+    const vv = window.visualViewport;
+    document.documentElement.style.setProperty("--app-h", (vv ? vv.height : innerHeight) + "px");
+    app.style.transform = vv && vv.offsetTop ? `translateY(${vv.offsetTop}px)` : "";
+  }
+  fitViewport();
+  if (window.visualViewport) { visualViewport.addEventListener("resize", fitViewport); visualViewport.addEventListener("scroll", fitViewport); }
+  addEventListener("resize", fitViewport);
+
+  let toastTimer;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastEl.hidden = true; }, 3200);
+  }
+
+  function showError(err) {
+    errMark = err.line ? { file: err.file, line: err.line } : null;
+    const where = ({ engine: "Engine", compiler: "Compiler" }[err.file] || "Game") + (err.line ? `, line ${err.line}` : "");
+    errorText.innerHTML = `<b>${where}:</b> ${esc(err.msg)}`;
+    errorBox.hidden = false;
+    if (MODE === "edit") renderGutter();
+  }
+  function clearError() {
+    errorBox.hidden = true;
+    errMark = null;
+    if (MODE === "edit") renderGutter();
+  }
+
+  if (MODE === "play") {
+    const err = start(files);
+    if (err) showError(err);
+    return { showError };
+  }
+
+  // ---------- highlighting ----------
+  const TOKENS = /(\/\/[^\n]*)|("(?:\\.|[^"\\\n])*"?)|(#[A-Za-z_]\w*|#)|(@)|(%)|(\{[A-Za-z_]\w*\})|([A-Za-z_]\w*)|(-?\d+(?:\.\d+)?)|([\[\]()])/g;
+  function highlight(src) {
+    let out = "", lastI = 0, m;
+    TOKENS.lastIndex = 0;
+    while ((m = TOKENS.exec(src))) {
+      out += esc(src.slice(lastI, m.index));
+      const t = esc(m[0]);
+      let cls = null;
+      if (m[1]) cls = "t-com";
+      else if (m[2]) cls = "t-str";
+      else if (m[3]) cls = "t-fn";
+      else if (m[4]) cls = "t-if";
+      else if (m[5]) cls = "t-loop";
+      else if (m[6]) cls = "t-var";
+      else if (m[7]) cls = (m[7] === "true" || m[7] === "false" || m[7] === "me") ? "t-kw" : null;
+      else if (m[8]) cls = "t-num";
+      else if (m[9]) cls = "t-br";
+      out += cls ? `<span class="${cls}">${t}</span>` : t;
+      lastI = TOKENS.lastIndex;
+    }
+    return out + esc(src.slice(lastI));
+  }
+  function renderGutter() {
+    if (tab === "help") return;
+    const n = ta.value.split("\n").length;
+    let s = "";
+    for (let i = 1; i <= n; i++) s += (errMark && errMark.file === tab && errMark.line === i) ? `<span class="bad">${i}</span>\n` : i + "\n";
+    gutter.innerHTML = s;
+    gutter.scrollTop = ta.scrollTop;
+  }
+  function syncScroll() {
+    hl.scrollTop = ta.scrollTop;
+    hl.scrollLeft = ta.scrollLeft;
+    gutter.scrollTop = ta.scrollTop;
+  }
+  function renderCode() {
+    hl.innerHTML = highlight(ta.value) + "\n";
+    renderGutter();
+    syncScroll();
+  }
+
+  // ---------- autosave ----------
+  function hashStr(s) {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return (h >>> 0).toString(36);
+  }
+  const SAVE_KEY = "kraken:" + hashStr(EMBEDDED.engine + "\u0000" + EMBEDDED.game + "\u0000" + EMBEDDED.compiler);
+  const unchanged = () => files.engine === EMBEDDED.engine && files.game === EMBEDDED.game && files.compiler === EMBEDDED.compiler;
+  let saveTimer;
+  function autosave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => flushSave(), 300);
+  }
+  function flushSave() {
+    clearTimeout(saveTimer);
+    try {
+      if (unchanged()) localStorage.removeItem(SAVE_KEY);
+      else localStorage.setItem(SAVE_KEY, JSON.stringify(files));
+    } catch (_) {}
+  }
+  addEventListener("pagehide", flushSave);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) flushSave(); });
+  let restored = false;
+  try {
+    const s = JSON.parse(localStorage.getItem(SAVE_KEY) || "null");
+    if (s && typeof s.engine === "string" && typeof s.game === "string" && typeof s.compiler === "string" &&
+        (s.engine !== files.engine || s.game !== files.game || s.compiler !== files.compiler)) {
+      files = { engine: s.engine, game: s.game, compiler: s.compiler };
+      restored = true;
+    }
+  } catch (_) {}
+
+  // ---------- tabs and views ----------
+  function setTab(t) {
+    if (tab !== "help") views[tab] = { s: ta.selectionStart, e: ta.selectionEnd, top: ta.scrollTop, left: ta.scrollLeft };
+    tab = t;
+    document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === t)));
+    const isHelp = t === "help";
+    editor.hidden = isHelp;
+    suckers.hidden = isHelp;
+    help.hidden = !isHelp;
+    if (!isHelp) {
+      ta.value = files[t];
+      renderCode();
+      const v = views[t];
+      ta.setSelectionRange(v.s, v.e);
+      ta.scrollTop = v.top;
+      ta.scrollLeft = v.left;
+      syncScroll();
+    }
+  }
+  function setView(v) {
+    main.dataset.view = v;
+    document.querySelectorAll(".views button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.view === v)));
+    requestAnimationFrame(resize);
+  }
+  document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+  document.querySelectorAll(".views button").forEach(b => b.addEventListener("click", () => { setView(b.dataset.view); b.blur(); }));
+
+  // ---------- typing ----------
+  function insert(text, caret = text.length) {
+    if (document.activeElement !== ta) ta.focus({ preventScroll: true });
+    const s = ta.selectionStart;
+    let ok = false;
+    try { ok = document.execCommand("insertText", false, text); } catch (_) {}
+    if (!ok) {
+      ta.setRangeText(text, ta.selectionStart, ta.selectionEnd, "end");
+      ta.dispatchEvent(new Event("input"));
+    }
+    ta.setSelectionRange(s + caret, s + caret);
+  }
+  function newline() {
+    const v = ta.value, s = ta.selectionStart, e = ta.selectionEnd;
+    const lineStart = v.lastIndexOf("\n", s - 1) + 1;
+    const indent = /^[ \t]*/.exec(v.slice(lineStart, s))[0];
+    const opens = v.slice(lineStart, s).trimEnd().endsWith("[");
+    const closesNext = /^[ \t]*\]/.test(v.slice(e));
+    if (opens && closesNext) insert("\n" + indent + "  \n" + indent, indent.length + 3);
+    else insert("\n" + indent + (opens ? "  " : ""));
+  }
+  ta.addEventListener("input", () => {
+    if (tab === "help") return;
+    files[tab] = ta.value;
+    renderCode();
+    autosave();
+  });
+  ta.addEventListener("scroll", syncScroll);
+  ta.addEventListener("beforeinput", e => {
+    if (e.isComposing) return;
+    if (e.inputType === "insertLineBreak" || e.inputType === "insertParagraph") { e.preventDefault(); newline(); }
+  });
+  ta.addEventListener("keydown", e => {
+    if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); insert("  "); }
+  });
+
+  // the tentacle of symbol suckers, biggest near the body
+  const SYMBOLS = [
+    ["#", "#"], ["[]", "[]", 1], ["()", "()", 1], ["{}", "{}", 1], ["@", "@"], ["%", "%"],
+    ['""', '""', 1], [",", ", "], [".", "."], ["=", " = "], ["]", "]"], [")", ")"], ["}", "}"],
+    ["//", "// "], ["⇥", "  "], ["↶", null]
+  ];
+  SYMBOLS.forEach(([label, text, caret], i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.style.setProperty("--s", Math.max(30, 46 - i * 1.1) + "px");
+    b.setAttribute("aria-label", text === null ? "Undo" : "Insert " + label);
+    const act = e => {
+      e.preventDefault();
+      if (text === null) { ta.focus({ preventScroll: true }); try { document.execCommand("undo"); } catch (_) {} return; }
+      insert(text, caret === undefined ? text.length : caret);
+    };
+    b.addEventListener("pointerdown", act);
+    b.addEventListener("mousedown", e => e.preventDefault());
+    b.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") act(e); });
+    suckers.appendChild(b);
+  });
+
+  // ---------- run, save, export ----------
+  function run(fromUser) {
+    clearError();
+    const err = start(files);
+    if (err) {
+      showError(err);
+      if (fromUser && narrow()) goToError();
+      return false;
+    }
+    if (fromUser && narrow()) setView("play");
+    return true;
+  }
+  function goToError() {
+    if (!errMark) return;
+    setView("code");
+    if (tab !== errMark.file) setTab(errMark.file);
+    const lines = ta.value.split("\n");
+    let pos = 0;
+    for (let i = 0; i < errMark.line - 1 && i < lines.length; i++) pos += lines[i].length + 1;
+    const lh = parseFloat(getComputedStyle(ta).lineHeight) || 22;
+    ta.setSelectionRange(pos, pos);
+    ta.scrollTop = Math.max(0, (errMark.line - 4) * lh);
+    syncScroll();
+    if (!coarse) ta.focus({ preventScroll: true });
+  }
+  errorText.addEventListener("click", goToError);
+
+  function canSave() {
+    let err = rebuildCompiler(files);
+    if (!err) { try { $K.L = 0; compileProgram(files); } catch (e) { err = errorAt(e); } }
+    if (!err) return true;
+    showError(err);
+    goToError();
+    toast("Fix this error first, so the saved file can start.");
+    return false;
+  }
+  const safe = s => s.replace(/<\/(script)/gi, "<\\/$1").replace(/<!--/g, "<\\!--");
+  function buildHTML(mode) {
+    const doc = new DOMParser().parseFromString(TEMPLATE, "text/html");
+    doc.documentElement.setAttribute("data-kraken-mode", mode);
+    doc.getElementById("hash-engine").textContent = "\n" + safe(files.engine);
+    doc.getElementById("hash-game").textContent = "\n" + safe(files.game);
+    doc.getElementById("hash-compiler").textContent = "\n" + safe(files.compiler);
+    doc.getElementById("hash-compiler-js").textContent = "\n" + safe(compiler.js) + "\n";
+    if (mode === "play") doc.title = "Kraken game";
+    return "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
+  }
+  function download(name, html) {
+    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+  function save() {
+    if (!canSave()) return;
+    download("kraken.html", buildHTML("edit"));
+    toast("Saved kraken.html with your edits built in.");
+  }
+  function exportGame() {
+    if (!canSave()) return;
+    download("kraken-game.html", buildHTML("play"));
+    toast("Exported kraken-game.html.");
+  }
+  function revert() {
+    if (!confirm("Undo all edits and go back to the code this file started with?")) return;
+    files = { engine: EMBEDDED.engine, game: EMBEDDED.game, compiler: EMBEDDED.compiler };
+    useBuiltInCompiler();
+    try { localStorage.removeItem(SAVE_KEY); } catch (_) {}
+    for (const k in views) views[k] = freshView();
+    if (tab !== "help") { ta.value = files[tab]; renderCode(); ta.scrollTop = 0; syncScroll(); }
+    run(false);
+    toast("Back to the original code.");
+  }
+
+  const runBtn = $("#runBtn");
+  runBtn.addEventListener("click", () => { runBtn.blur(); run(true); });
+  function closeMenu() { fileMenu.hidden = true; fileBtn.setAttribute("aria-expanded", "false"); }
+  fileBtn.addEventListener("click", e => {
+    e.stopPropagation();
+    fileMenu.hidden = !fileMenu.hidden;
+    fileBtn.setAttribute("aria-expanded", String(!fileMenu.hidden));
+  });
+  fileMenu.addEventListener("click", e => {
+    const b = e.target.closest("button[data-act]");
+    if (!b) return;
+    closeMenu();
+    fileBtn.blur();
+    ({ save, export: exportGame, revert })[b.dataset.act]();
+  });
+  document.addEventListener("click", e => { if (!fileMenu.hidden && !e.target.closest(".menu-wrap")) closeMenu(); });
+
+  // global keys: game buttons, plus shortcuts
+  addEventListener("keydown", e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(true); return; }
+    if ((e.ctrlKey || e.metaKey) && (e.key || "").toLowerCase() === "s") { e.preventDefault(); save(); return; }
+    if (e.key === "Escape" && !fileMenu.hidden) { closeMenu(); return; }
+    const t = e.target, tag = t && t.tagName;
+    if (tag === "TEXTAREA" || tag === "INPUT" || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (tag === "BUTTON" && (e.key === "Enter" || e.key === " ")) return;
+    for (const n of keyNames(e)) { if (!RT.kb[n]) RT.hit[n] = true; RT.kb[n] = true; }
+    if (e.key.startsWith("Arrow") || e.key === " ") e.preventDefault();
+  });
+  addEventListener("keyup", e => { for (const n of keyNames(e)) RT.kb[n] = false; });
+
+  setTab("game");
+  run(false);
+  if (restored) toast("Picked up your edits from last time.");
+
+  window.Kraken = { files: () => files, run: () => run(true), buildHTML, compiler: () => compiler, K: $K };
+  return { showError };
+})();
+
+if (MODE === "play") {
+  addEventListener("keydown", e => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    for (const n of keyNames(e)) { if (!RT.kb[n]) RT.hit[n] = true; RT.kb[n] = true; }
+    if (e.key.startsWith("Arrow") || e.key === " ") e.preventDefault();
+  });
+  addEventListener("keyup", e => { for (const n of keyNames(e)) RT.kb[n] = false; });
+}
+})();
+</script>
+</body>
+</html>
