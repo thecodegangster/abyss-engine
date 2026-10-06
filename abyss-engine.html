@@ -290,7 +290,7 @@ html[data-abyss-mode="play"] #screen { border-radius: 0; box-shadow: none; }
         <p>Inner functions can use and change the variables around them. Ending a function with <code>me</code> hands back everything inside it, so <code>enemy(5)</code> can make a fresh enemy that you use as <code>e.x</code> or <code>e.move()</code>.</p>
 
         <h3>Your game</h3>
-        <p><code>#init</code> runs once when the game starts, and <code>#update</code> runs 60 times a second. The screen is 320 by 240 unless you call <code>screen(w, h)</code> in <code>#init</code>.</p>
+        <p><code>#init</code> runs once when the game starts, and <code>#update</code> runs 60 times a second. Add a <code>#draw</code> and it runs (average fps + 10) times a second, so put your drawing there and keep game rules in <code>#update</code>. Games that draw inside <code>#update</code> still work. The screen is 320 by 240 unless you call <code>screen(w, h)</code> in <code>#init</code>.</p>
 
         <p>File &gt; Projects keeps up to 8 projects in this browser. Each has its own game code (and any changes you made to the Engine or Compiler tabs). Open, rename, duplicate or delete them there. Work saves to the open project as you type. Projects stay when you open a newer Abyss Engine file in the same browser, but they are not shared between browsers, so use File &gt; Export game to keep a copy.</p>
         <p>The Game tab can hold several tabs of code. The row under the main tabs lists them: tap <code>+</code> and type a name to add one, tap <code>×</code> to remove one (twice, if it has code in it), and double-tap a name to rename it. They are joined into one program, in order from left to right, so every tab shares the same functions and variables. A variable that runs at start-up must be made in a tab to the left of the code that uses it. Errors show the tab and line.</p>
@@ -394,7 +394,7 @@ html[data-abyss-mode="play"] #screen { border-radius: 0; box-shadow: none; }
         <p><code>screenHeight()</code> Game height.</p>
         <p><code>padSpace()</code> Extra pixels the engine leaves under the game for the phone pad. 0 when there is none.</p>
         <p><code>usePadSpace(on)</code> Allows or stops that extra space.</p>
-        <p><code>clipToGame(on)</code> While on, drawing is cut off at the game's edges. The engine uses it around <code>#update</code>.</p>
+        <p><code>clipToGame(on)</code> While on, drawing is cut off at the game's edges. The engine uses it around <code>#update</code> and <code>#draw</code>.</p>
         <h3>Input</h3>
         <p><code>keyDown(name)</code> True while the button is held: left, right, up, down, a, b. Keyboard keys work too, like "space".</p>
         <p><code>keyPressed(name)</code> True only on the frame the button goes down.</p>
@@ -418,6 +418,7 @@ html[data-abyss-mode="play"] #screen { border-radius: 0; box-shadow: none; }
         <p><code>after(frames, action)</code> Runs <code>action</code> once, after so many frames.</p>
         <p><code>gamepad(on)</code> Shows or hides the phone pad. Hide it for tap games.</p>
         <p><code>frameCount</code> Frames since the game started. A variable, not a function.</p>
+        <p><code>fps()</code> The average frames per second the screen is really getting, like 60. Games' <code>#draw</code> runs <code>fps() + 10</code> times a second.</p>
         <h3>Sound (Engine tab, plus synth and silence)</h3>
         <p><code>sfx(name)</code> Ready-made effects: "jump", "coin", "select", "laser", "hit", "explode", "powerup".</p>
         <p><code>play(song, bpm, wave)</code> Plays a song once and gives back its length in seconds. Steps are separated by spaces and last one beat each: a note like "C4", "C#5" or "Eb3", a chord like "C4+E4+G4", a drum ("kick", "snare", "hat") or "-" for a rest. "G4:2" holds for 2 beats. Defaults are 120 bpm and "square". Waves: "sine", "square", "saw", "triangle".</p>
@@ -721,9 +722,12 @@ put(DRUMS, "hat", list(list("noise", 0, 0, 0.04, 0.25, 0)))
 
 // ---------- Main loop ----------
 // Abyss Engine calls #start once when a game runs,
-// then #frame 60 times a second.
+// then #frame 60 times a second. #frame runs your #update.
+// If your game has a #draw, it runs too, (average fps + 10) times a second.
+// fps() is the average frames per second the screen is really getting.
 
 {frameCount} = 0
+{drawDebt} = 1
 
 #start[
   @(game.init)[ game.init() ]
@@ -736,6 +740,13 @@ put(DRUMS, "hat", list(list("noise", 0, 0, 0.04, 0.25, 0)))
   timers = keep(timers, #(t)[ not(t.done) ])
   clipToGame(true)
   @(game.update)[ game.update() ]
+  @(game.draw)[
+    drawDebt = add(drawDebt, div(add(fps(), 10), 60))
+    %(gte(drawDebt, 1))[
+      game.draw()
+      drawDebt = sub(drawDebt, 1)
+    ]
+  ]
   clipToGame(false)
   padDraw()
 ]
@@ -777,7 +788,6 @@ put(DRUMS, "hat", list(list("noise", 0, 0, 0.04, 0.25, 0)))
 ]
 
 #update[
-  clear("#0f2733")
   @(alive)[
     @(keyDown("left"))[ px = sub(px, 3) ]
     @(keyDown("right"))[ px = add(px, 3) ]
@@ -792,15 +802,21 @@ put(DRUMS, "hat", list(list("noise", 0, 0, 0.04, 0.25, 0)))
       ]
     ]
     enemies = keep(enemies, #(e)[ not(e.gone()) ])
+  ][
+    @(keyPressed("a"))[ sfx("select")
+      restart() ]
   ]
+]
+
+// #draw runs (average fps + 10) times a second. Keep it to drawing.
+#draw[
+  clear("#0f2733")
   %(enemies, e)[ e.draw() ]
   drawRect(px, 210, 20, 20, "#8fe3ff")
   drawText(join("Score ", score, "   Best ", best), 8, 8, "#dcefe9", 12)
   @(not(alive))[
     drawCenteredText("Game over", 160, 100, "#ffffff", 24)
     drawCenteredText("Press A or Space to play again", 160, 132, "#8fb3b8", 11)
-    @(keyPressed("a"))[ sfx("select")
-      restart() ]
   ]
 ]
 </script>
@@ -3427,7 +3443,7 @@ put(WORD_HINTS, "self", "Use me to hand back a function's insides.")
 
 <script type="text/plain" id="hash-compiler-js">
 "use strict";
-const {add:h_add,sub:h_sub,mul:h_mul,div:h_div,mod:h_mod,min:h_min,max:h_max,abs:h_abs,floor:h_floor,ceil:h_ceil,round:h_round,sqrt:h_sqrt,pow:h_pow,sin:h_sin,cos:h_cos,atan2:h_atan2,pi:h_pi,random:h_random,eq:h_eq,neq:h_neq,lt:h_lt,gt:h_gt,lte:h_lte,gte:h_gte,and:h_and,or:h_or,not:h_not,join:h_join,text:h_text,number:h_number,size:h_size,slice:h_slice,lower:h_lower,upper:h_upper,quote:h_quote,list:h_list,map:h_map,keys:h_keys,get:h_get,put:h_put,push:h_push,pop:h_pop,removeAt:h_removeAt,remove:h_remove,has:h_has,joinList:h_joinList,keep:h_keep,clear:h_clear,drawRect:h_drawRect,drawCircle:h_drawCircle,drawLine:h_drawLine,drawText:h_drawText,textWidth:h_textWidth,screen:h_screen,screenWidth:h_screenWidth,screenHeight:h_screenHeight,padSpace:h_padSpace,usePadSpace:h_usePadSpace,clipToGame:h_clipToGame,keyDown:h_keyDown,keyPressed:h_keyPressed,touching:h_touching,touchX:h_touchX,touchY:h_touchY,touches:h_touches,press:h_press,isTouch:h_isTouch,print:h_print,time:h_time,fail:h_fail,builtins:h_builtins}=$K.P;
+const {add:h_add,sub:h_sub,mul:h_mul,div:h_div,mod:h_mod,min:h_min,max:h_max,abs:h_abs,floor:h_floor,ceil:h_ceil,round:h_round,sqrt:h_sqrt,pow:h_pow,sin:h_sin,cos:h_cos,atan2:h_atan2,pi:h_pi,random:h_random,eq:h_eq,neq:h_neq,lt:h_lt,gt:h_gt,lte:h_lte,gte:h_gte,and:h_and,or:h_or,not:h_not,join:h_join,text:h_text,number:h_number,size:h_size,slice:h_slice,lower:h_lower,upper:h_upper,quote:h_quote,list:h_list,map:h_map,keys:h_keys,get:h_get,put:h_put,push:h_push,pop:h_pop,removeAt:h_removeAt,remove:h_remove,has:h_has,joinList:h_joinList,keep:h_keep,clear:h_clear,drawRect:h_drawRect,drawCircle:h_drawCircle,drawLine:h_drawLine,drawText:h_drawText,textWidth:h_textWidth,screen:h_screen,screenWidth:h_screenWidth,screenHeight:h_screenHeight,padSpace:h_padSpace,usePadSpace:h_usePadSpace,clipToGame:h_clipToGame,keyDown:h_keyDown,keyPressed:h_keyPressed,touching:h_touching,touchX:h_touchX,touchY:h_touchY,touches:h_touches,press:h_press,isTouch:h_isTouch,print:h_print,time:h_time,fps:h_fps,fail:h_fail,dom:h_dom,domAll:h_domAll,doc:h_doc,active:h_active,make:h_make,on:h_on,later:h_later,fire:h_fire,exec:h_exec,media:h_media,css:h_css,escape:h_escape,split:h_split,find:h_find,findLast:h_findLast,synth:h_synth,silence:h_silence,jsonRead:h_jsonRead,jsonWrite:h_jsonWrite,storeGet:h_storeGet,storeSet:h_storeSet,storeRemove:h_storeRemove,clock:h_clock,fetchText:h_fetchText,use:h_use,lib:h_lib,create:h_create,builtins:h_builtins}=$K.P;
 return (function(){
 $K.L=3000008;let h_DIGITS="0123456789";
 $K.L=3000009;let h_NAME_START="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
@@ -3821,7 +3837,8 @@ const RT = {
   kb: Object.create(null), vk: Object.create(null), prev: Object.create(null), hit: Object.create(null),
   extra: 0, wantPad: true, clipped: false,
   ptr: new Map(), touch: coarse || ("ontouchstart" in window && !matchMedia("(pointer: fine)").matches),
-  logs: [], logDirty: false, t0: performance.now()
+  logs: [], logDirty: false, t0: performance.now(),
+  avgDt: 1 / 60
 };
 
 function kindOf(v) {
@@ -3939,6 +3956,7 @@ const PRIMS = {
     RT.logDirty = true;
   },
   time: () => (performance.now() - RT.t0) / 1000,
+  fps: () => Math.max(1, Math.round(10 / RT.avgDt) / 10),
   fail: (msg, file, line, col) => { throw new HashError(show(msg), file || "game", line || 1, col || 1); },
   dom: s => document.querySelector(s), domAll: s => [...document.querySelectorAll(s)], doc: () => document,
   active: () => document.activeElement, make: t => document.createElement(t),
@@ -4221,6 +4239,7 @@ function tick(now) {
   requestAnimationFrame(tick);
   let dt = (now - last) / 1000;
   last = now;
+  if (dt > 0 && dt < 0.25 && !document.hidden) RT.avgDt += (dt - RT.avgDt) * 0.05;
   if (dt > 0.25) dt = 0.25;
   if (RT.logDirty && logEl) { RT.logDirty = false; logEl.textContent = RT.logs.join("\n"); logEl.scrollTop = logEl.scrollHeight; }
   if (!running || document.hidden || !stageWrap.clientWidth) { acc = 0; return; }
