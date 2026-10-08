@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Abyss Engine Data Reset</title>
+<style>
+  :root{--bg:#07131c;--panel:#0d2230;--line:#1b4057;--txt:#d6eef7;--dim:#7fa6b8;--acc:#2fd0c4;--bad:#ff5d6c}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.45 system-ui,sans-serif;padding:16px;max-width:720px;margin:auto}
+  h1{font-size:22px;margin:8px 0 2px;color:var(--acc)}
+  p.sub{color:var(--dim);margin:0 0 16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+  .row{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid #123245;word-break:break-all}
+  .row:last-child{border:0}
+  .row span:last-child{color:var(--dim);white-space:nowrap}
+  button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:12px 16px;margin:4px 6px 4px 0;cursor:pointer;background:#16445a;color:var(--txt)}
+  button.danger{background:var(--bad);color:#fff}
+  button:disabled{opacity:.4}
+  label{display:block;margin:6px 0;color:var(--dim)}
+  #log{font:13px/1.5 ui-monospace,monospace;white-space:pre-wrap;color:var(--acc)}
+  h2{font-size:15px;margin:0 0 8px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+  .warn{color:#ffd166;font-size:13px}
+</style>
+</head>
+<body>
+<h1>Abyss Engine Data Reset</h1>
+<p class="sub">Clears everything the browser has saved for this page's origin.</p>
+
+<div class="card warn">
+  Browser storage is separated per website/origin. This page must be opened from the <b>same place</b> as your Abyss Engine file (same domain, or same folder/location if it's a local file), otherwise it can't see the engine's data.
+</div>
+
+<div class="card"><h2>Found data</h2><div id="found">Scanning…</div></div>
+
+<div class="card">
+  <h2>Options</h2>
+  <label><input type="checkbox" id="oLS" checked> localStorage</label>
+  <label><input type="checkbox" id="oSS" checked> sessionStorage</label>
+  <label><input type="checkbox" id="oIDB" checked> IndexedDB databases</label>
+  <label><input type="checkbox" id="oCache" checked> Cache Storage + service workers</label>
+  <label><input type="checkbox" id="oCookie" checked> Cookies</label>
+</div>
+
+<div class="card">
+  <button id="bBackup">Download backup first</button>
+  <button id="bRescan">Rescan</button>
+  <button id="bWipe" class="danger">Wipe selected data</button>
+</div>
+
+<div class="card"><h2>Log</h2><div id="log">Ready.</div></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = m => { $('log').textContent += '\n' + m; };
+
+function fmt(n){ return n < 1024 ? n + ' B' : (n/1024).toFixed(1) + ' KB'; }
+
+async function listIDB(){
+  if (!indexedDB.databases) return null; // older Firefox
+  try { return await indexedDB.databases(); } catch(e){ return null; }
+}
+
+async function scan(){
+  const out = [];
+  let lsBytes = 0, ssBytes = 0;
+  try { for (let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); lsBytes += k.length + (localStorage.getItem(k)||'').length; } } catch(e){}
+  try { for (let i=0;i<sessionStorage.length;i++){ const k=sessionStorage.key(i); ssBytes += k.length + (sessionStorage.getItem(k)||'').length; } } catch(e){}
+  let ls = 0, ss = 0;
+  try { ls = localStorage.length; } catch(e){}
+  try { ss = sessionStorage.length; } catch(e){}
+  out.push(['localStorage keys', ls + ' (' + fmt(lsBytes*2) + ')']);
+  out.push(['sessionStorage keys', ss + ' (' + fmt(ssBytes*2) + ')']);
+  const dbs = await listIDB();
+  out.push(['IndexedDB databases', dbs ? (dbs.length ? dbs.map(d=>d.name).join(', ') : '0') : 'unknown (browser can\'t list)']);
+  let caches_n = 0;
+  try { caches_n = (await caches.keys()).length; } catch(e){}
+  out.push(['Cache Storage entries', caches_n]);
+  let sw = 0;
+  try { sw = (await navigator.serviceWorker.getRegistrations()).length; } catch(e){}
+  out.push(['Service workers', sw]);
+  out.push(['Cookies', document.cookie ? document.cookie.split(';').length : 0]);
+  $('found').innerHTML = out.map(r => '<div class="row"><span>'+r[0]+'</span><span>'+r[1]+'</span></div>').join('');
+  out.push(['Origin', location.origin]);
+  $('found').innerHTML += '<div class="row"><span>Origin</span><span>'+location.origin+'</span></div>';
+}
+
+async function backup(){
+  const data = { localStorage:{}, sessionStorage:{}, note:'IndexedDB not included' };
+  try { for (let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); data.localStorage[k]=localStorage.getItem(k); } } catch(e){}
+  try { for (let i=0;i<sessionStorage.length;i++){ const k=sessionStorage.key(i); data.sessionStorage[k]=sessionStorage.getItem(k); } } catch(e){}
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+  a.download = 'abyss-backup-' + Date.now() + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  log('Backup downloaded (localStorage + sessionStorage).');
+}
+
+function deleteDB(name){
+  return new Promise(res => {
+    const r = indexedDB.deleteDatabase(name);
+    r.onsuccess = () => res('deleted');
+    r.onerror = () => res('error');
+    r.onblocked = () => res('blocked (close other Abyss tabs, then retry)');
+  });
+}
+
+async function wipe(){
+  if (!confirm('Permanently delete the selected saved data? This cannot be undone.')) return;
+  if ($('oLS').checked){ try { localStorage.clear(); log('localStorage cleared.'); } catch(e){ log('localStorage: '+e.message); } }
+  if ($('oSS').checked){ try { sessionStorage.clear(); log('sessionStorage cleared.'); } catch(e){ log('sessionStorage: '+e.message); } }
+  if ($('oIDB').checked){
+    const dbs = await listIDB();
+    if (dbs && dbs.length){
+      for (const d of dbs){ log('IndexedDB "'+d.name+'": ' + await deleteDB(d.name)); }
+    } else if (dbs){ log('No IndexedDB databases found.'); }
+    else { log('This browser can\'t list IndexedDB databases; open the engine and tell me its DB name if data persists.'); }
+  }
+  if ($('oCache').checked){
+    try { for (const k of await caches.keys()){ await caches.delete(k); log('Cache "'+k+'" deleted.'); } } catch(e){}
+    try { for (const r of await navigator.serviceWorker.getRegistrations()){ await r.unregister(); log('Service worker unregistered.'); } } catch(e){}
+  }
+  if ($('oCookie').checked){
+    document.cookie.split(';').forEach(c => {
+      const n = c.split('=')[0].trim(); if (!n) return;
+      document.cookie = n + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+    });
+    log('Cookies cleared.');
+  }
+  log('Done. Reload Abyss Engine for a fresh start.');
+  scan();
+}
+
+$('bBackup').onclick = backup;
+$('bRescan').onclick = scan;
+$('bWipe').onclick = wipe;
+scan();
+</script>
+</body>
+</html>
