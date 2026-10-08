@@ -1,0 +1,494 @@
+//@ pack Easy Export (UI)
+//@ target ui
+// Adds an Easy Export tab next to Play, Code, Audio and Packs. It turns your project into one line of
+// text you can copy (to keep, or to send to a friend), and turns such a line back into a project.
+//
+//   Export   Your game code (every game tab, so sprites made in the Sprites tab come along), plus the
+//            Engine and Compiler if you have edited them, plus any packs you tick. Tap Copy, or Save as file.
+//   Import   Paste a line in, or open a saved file. Import as new project keeps what you have now.
+//            Replace this project writes the imported game code over the open one (two taps).
+//
+// Packs that come in are added but left turned off, like any imported pack. Read them in the Packs view
+// first, then turn them on. A line made here starts with abyss1: and only uses letters, numbers, + / and =,
+// so it survives being pasted into chats and notes. If it gets cut off when copied, Import says so.
+//
+// Not included: the UI, Save and Packer tabs (they belong to Abyss Engine, not to one project), and which
+// libraries you allowed. Engine, compiler and pack code runs inside Abyss Engine, so only import lines from
+// people you trust.
+//
+// Dependencies: none. A line that carries packs, like Sprites (engine), brings their code with it, so the
+// other person does not need to have them already.
+// This pack only adds things. It does not replace any of the UI's own functions. Every name it adds starts with ee.
+
+{EE_PREFIX} = "abyss1:"
+{EE_B64} = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+{EE_BS} = slice(quote("\""), 1, 2)
+
+// ---------- state ----------
+{eeUseEngine} = true
+{eeUseCompiler} = true
+{eeSel} = map()
+{eeText} = ""
+{eePending} = false
+{eeErr} = ""
+{eeArmed} = false
+{eeArmId} = 0
+
+// ---------- page pieces (made by eeInstall) ----------
+{eeSum} = false
+{eeBox} = false
+{eeOut} = false
+{eeSize} = false
+{eeIn} = false
+{eeNote} = false
+{eeNewBtn} = false
+{eeRepBtn} = false
+
+// ---------- look ----------
+#eeCss[
+  {r} = list()
+  push(r, ".main[data-view=easyexport] { grid-template-columns: minmax(0, 1fr); }")
+  push(r, ".main[data-view=easyexport] .stage-pane, .main[data-view=easyexport] .code-pane { display: none; }")
+  push(r, ".main[data-view=easyexport] #easyexport { display: flex; }")
+  push(r, ".ee-wrap { max-width: 760px; display: flex; flex-direction: column; gap: 14px; }")
+  push(r, ".ee-card { background: var(--trench); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }")
+  push(r, ".ee-h { font-weight: 700; font-size: 15px; margin: 0 0 4px; }")
+  push(r, ".ee-note { color: var(--mist); font-size: 13px; margin: 2px 0 8px; overflow-wrap: anywhere; }")
+  push(r, ".ee-note.ee-warn { color: #ffd6de; background: #3a1622; border-radius: 8px; padding: 8px 10px; }")
+  push(r, ".ee-line { margin: 2px 0; }")
+  push(r, ".ee-check { display: flex; gap: 8px; align-items: center; padding: 5px 0; font-size: 14px; }")
+  push(r, ".ee-check input { width: 18px; height: 18px; flex: none; accent-color: var(--skin); }")
+  push(r, ".ee-check small { color: var(--mist); font-size: 12.5px; }")
+  push(r, ".ee-label { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--mist); margin: 8px 0 2px; }")
+  push(r, ".ee-area { width: 100%; box-sizing: border-box; min-height: 92px; resize: vertical; background: var(--abyss); color: var(--foam); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; word-break: break-all; }")
+  push(r, ".ee-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }")
+  push(r, ".ee-row .btn:disabled { opacity: .4; }")
+  push(r, ".ee-row .btn.ee-armed { background: var(--skin); color: #fff; }")
+  push(r, ".ee-size { color: var(--mist); font-size: 13px; }")
+  push(r, "@media (max-width: 560px) { .bar { gap: 6px; padding: 8px 6px; } .views { min-width: 0; overflow-x: auto; scrollbar-width: none; } .views::-webkit-scrollbar { display: none; } .views button { flex: none; padding: 6px 8px; font-size: 13px; } .bar .btn { padding: 0 10px; } }")
+  push(r, "@media (max-width: 480px) { .brand { display: none; } }")
+  joinList(r, "\n")
+]
+
+// ---------- small helpers ----------
+#eeAdd(parent, tag, cls, label)[
+  {el} = make(tag)
+  el.className = cls
+  el.textContent = label
+  parent.appendChild(el)
+  el
+]
+
+#eeButton(parent, label, fn)[
+  {b} = eeAdd(parent, "button", "btn", label)
+  b.type = "button"
+  on(b, "click", fn)
+  b
+]
+
+#eePlural(n, one, many)[ @(eq(n, 1))[ join(n, " ", one) ][ join(n, " ", many) ] ]
+
+#eeWin[ doc().defaultView ]
+
+// A file name from a project name.
+#eeSlug(raw)[
+  {out} = ""
+  %(size(raw), i)[
+    {c} = slice(raw, i, add(i, 1))
+    @(has(NAMECH, c))[ out = join(out, c) ][ @(eq(c, " "))[ out = join(out, "-") ] ]
+  ]
+  @(not(size(out)))[ out = "project" ]
+  slice(out, 0, 30)
+]
+
+#eeSizeText(n)[
+  @(lt(n, 1000))[ join(n, " characters") ][ join(div(round(div(n, 100)), 10), " KB") ]
+]
+
+// The names of the game tabs in a game text: Main, then one for every "//// Name" line.
+#eeTabNames(game)[
+  {names} = list("Main")
+  %(split(game, "\n"), line)[
+    @(eq(slice(line, 0, 5), "//// "))[ push(names, slice(line, 5, size(line))) ]
+  ]
+  names
+]
+
+#eeProjectName[
+  {pr} = H.projects()
+  {nm} = "My game"
+  %(pr.items, p)[ @(eq(get(p, "id"), pr.active))[ nm = get(p, "name") ] ]
+  nm
+]
+
+#eeEdited(which)[ neq(get(H.files, which), get(H.defaults, which)) ]
+
+// ---------- which packs can go along ----------
+#eePacks[
+  {rows} = list()
+  @(H.packs)[ rows = H.packs.all() ]
+  rows
+]
+
+// Packs that are on and change the game or engine are ticked to begin with. Editor packs are not.
+#eePackOn(p)[
+  {id} = get(p, "id")
+  {on} = and(get(p, "on"), has(list("engine", "game", "compiler"), get(p, "target")))
+  @(has(eeSel, id))[ on = get(eeSel, id) ]
+  on
+]
+
+// ---------- making the line of text ----------
+#eePayload[
+  {m} = map()
+  put(m, "v", 1)
+  put(m, "name", eeProjectName())
+  put(m, "game", get(H.files, "game"))
+  @(and(eeEdited("engine"), eeUseEngine))[ put(m, "engine", get(H.files, "engine")) ]
+  @(and(eeEdited("compiler"), eeUseCompiler))[ put(m, "compiler", get(H.files, "compiler")) ]
+  {packs} = list()
+  %(eePacks(), p)[
+    @(eePackOn(p))[
+      {x} = map()
+      put(x, "name", get(p, "name"))
+      put(x, "code", H.packs.code(get(p, "id")))
+      push(packs, x)
+    ]
+  ]
+  @(size(packs))[ put(m, "packs", packs) ]
+  m
+]
+
+// Writes every character outside plain ASCII as \uXXXX, which JSON reads back as the same character.
+#eeAscii(t)[
+  {parts} = list()
+  %(size(t), i)[
+    {c} = slice(t, i, add(i, 1))
+    {n} = c.charCodeAt(0)
+    @(gt(n, 126))[
+      {h} = n.toString(16)
+      push(parts, join(EE_BS, "u", slice(join("0000", h), size(h), add(size(h), 4))))
+    ][ push(parts, c) ]
+  ]
+  joinList(parts, "")
+]
+
+#eeEncode(m)[
+  {json} = eeAscii(jsonWrite(m))
+  {win} = eeWin()
+  join(EE_PREFIX, win.btoa(json))
+]
+
+// ---------- reading a line of text ----------
+// Spaces and line breaks can sneak in when text is pasted, so they are taken out.
+#eeSquash(raw)[
+  {t} = raw
+  %(list(" ", "\n", "\t"), sep)[ t = joinList(split(t, sep), "") ]
+  t
+]
+
+// Is this base64: only its own letters, and no more than two = at the very end, in groups of four?
+#eeB64Ok(t)[
+  {body} = t
+  {pad} = 0
+  %(and(gt(size(body), 0), eq(slice(body, sub(size(body), 1), size(body)), "=")))[
+    body = slice(body, 0, sub(size(body), 1))
+    pad = add(pad, 1)
+  ]
+  {ok} = and(gt(size(body), 0), lte(pad, 2), eq(mod(size(t), 4), 0))
+  %(size(body), i)[ @(not(has(EE_B64, slice(body, i, add(i, 1)))))[ ok = false ] ]
+  ok
+]
+
+#eeIsText(x)[ eq(text(x), x) ]
+
+// Turns what was pasted into the project it holds, or false (and says why in eeErr).
+#eeDecode(raw)[
+  eeErr = ""
+  {res} = false
+  {t} = eeSquash(raw)
+  @(size(t))[
+    @(neq(slice(t, 0, size(EE_PREFIX)), EE_PREFIX))[
+      eeErr = "That doesn't look like an Easy Export line. It should start with abyss1:"
+    ][
+      {b} = slice(t, size(EE_PREFIX), size(t))
+      @(not(eeB64Ok(b)))[
+        eeErr = "This line is damaged. It may have been cut off when it was copied. Copy all of it again."
+      ][
+        {win} = eeWin()
+        {json} = win.atob(b)
+        {m} = false
+        @(eq(slice(json, 0, 1), "{"))[ m = jsonRead(json) ]
+        @(not(m))[ eeErr = "This line is damaged. It may have been cut off when it was copied. Copy all of it again." ][
+          @(not(and(eq(get(m, "v"), 1), has(m, "game"))))[
+            eeErr = "This line came from a different version of Easy Export, so it can't be read."
+          ][
+            @(not(eeIsText(get(m, "game"))))[ eeErr = "This line has no readable game code in it." ][ res = m ]
+          ]
+        ]
+      ]
+    ]
+  ]
+  res
+]
+
+// ---------- showing it ----------
+#eeCheckRow(parent, label, detail, checked, locked, fn)[
+  {lab} = eeAdd(parent, "label", "ee-check", "")
+  {cb} = eeAdd(lab, "input", "", "")
+  cb.type = "checkbox"
+  cb.checked = checked
+  cb.disabled = locked
+  on(cb, "change", #(e)[ fn(cb.checked) ])
+  eeAdd(lab, "span", "", label)
+  @(size(detail))[ eeAdd(lab, "small", "", detail) ]
+  lab
+]
+
+#eeRefreshOut[
+  eeText = eeEncode(eePayload())
+  eeOut.value = eeText
+  eeSize.textContent = join("One line, ", eeSizeText(size(eeText)), ".")
+]
+
+#eeRenderExport[
+  {game} = get(H.files, "game")
+  {names} = eeTabNames(game)
+  eeSum.textContent = join(eeProjectName(), ". ", eePlural(size(names), "game tab", "game tabs"), ": ", joinList(names, ", "), ".")
+  eeBox.innerHTML = ""
+  eeCheckRow(eeBox, "Game code", "always included", true, true, #(v)[ 0 ])
+  @(eeEdited("engine"))[
+    eeCheckRow(eeBox, "Engine", "you have edited it", eeUseEngine, false, #(v)[
+      eeUseEngine = v
+      eeRefreshOut()
+    ])
+  ]
+  @(eeEdited("compiler"))[
+    eeCheckRow(eeBox, "Compiler", "you have edited it", eeUseCompiler, false, #(v)[
+      eeUseCompiler = v
+      eeRefreshOut()
+    ])
+  ]
+  {rows} = eePacks()
+  @(size(rows))[
+    eeAdd(eeBox, "div", "ee-label", "Packs")
+    %(rows, p)[
+      {pid} = get(p, "id")
+      {state} = join(get(p, "target"), ", turned off")
+      @(get(p, "on"))[ state = join(get(p, "target"), ", turned on") ]
+      eeCheckRow(eeBox, get(p, "name"), state, eePackOn(p), false, #(v)[
+        put(eeSel, pid, v)
+        eeRefreshOut()
+      ])
+    ]
+  ]
+  eeRefreshOut()
+]
+
+#eeRenderNote[
+  eeNote.innerHTML = ""
+  eeNote.className = "ee-note"
+  {d} = eePending
+  eeNewBtn.disabled = not(d)
+  eeRepBtn.disabled = not(d)
+  eeRepBtn.className = "btn"
+  eeRepBtn.textContent = "Replace this project"
+  @(eeArmed)[
+    eeRepBtn.className = "btn ee-armed"
+    eeRepBtn.textContent = "Replace? Tap again"
+  ]
+  @(size(eeErr))[
+    eeNote.className = "ee-note ee-warn"
+    eeNote.textContent = eeErr
+  ]
+  @(d)[
+    {names} = eeTabNames(get(d, "game"))
+    {nm} = "Imported project"
+    @(and(has(d, "name"), eeIsText(get(d, "name"))))[ @(size(get(d, "name")))[ nm = get(d, "name") ] ]
+    eeAdd(eeNote, "div", "ee-line", join("Project: ", nm))
+    eeAdd(eeNote, "div", "ee-line", join("Game code: ", eePlural(size(names), "tab", "tabs"), " (", joinList(names, ", "), ")"))
+    {extra} = list()
+    @(has(d, "engine"))[ push(extra, "engine") ]
+    @(has(d, "compiler"))[ push(extra, "compiler") ]
+    {packNames} = list()
+    @(and(H.packs, has(d, "packs")))[
+      %(get(d, "packs"), p)[ push(packNames, get(H.packs.meta(get(p, "code")), "name")) ]
+    ]
+    @(size(extra))[ eeAdd(eeNote, "div", "ee-line", join("Also changes: ", joinList(extra, " and "), ".")) ]
+    @(size(packNames))[ eeAdd(eeNote, "div", "ee-line", join("Packs: ", joinList(packNames, ", "), ". They are added turned off.")) ]
+    @(or(size(extra), size(packNames)))[
+      eeAdd(eeNote, "div", "ee-line", "Engine, compiler and pack code runs inside Abyss Engine, so only import lines from people you trust.")
+    ]
+  ]
+]
+
+// Reads the box again (it was typed in, pasted, or filled from a file).
+#eeCheckInput[
+  eeArmed = false
+  eePending = eeDecode(eeIn.value)
+  eeRenderNote()
+]
+
+// ---------- doing things ----------
+#eeCopy[
+  eeOut.focus()
+  eeOut.select()
+  eeOut.setSelectionRange(0, add(size(eeText), 10))
+  @(exec("copy"))[ toast("Copied.") ][ toast("Press and hold the text to copy it.") ]
+]
+
+#eeSaveFile[
+  H.saveFile(join(eeSlug(eeProjectName()), ".easy-export.txt"), eeText)
+  toast("Saved as a file.")
+]
+
+#eeOpenFile[
+  H.pickFile(#(t)[
+    @(t)[
+      eeIn.value = t
+      eeCheckInput()
+    ][ toast("Couldn't read that file.") ]
+  ])
+]
+
+// Puts the packs from an import into the pack list, turned off. Skips ones you already have.
+// Gives how many were added.
+#eeAddPacks(d)[
+  {added} = 0
+  @(and(H.packs, has(d, "packs")))[
+    %(get(d, "packs"), p)[
+      {code} = get(p, "code")
+      {dup} = false
+      %(H.packs.all(), row)[ @(eq(H.packs.code(get(row, "id")), code))[ dup = true ] ]
+      @(not(dup))[
+        H.packs.newPack(code, H.files)
+        added = add(added, 1)
+      ]
+    ]
+  ]
+  added
+]
+
+#eeApply(replace)[
+  {d} = eePending
+  @(d)[
+    {ok} = true
+    {nm} = "Imported project"
+    @(and(has(d, "name"), eeIsText(get(d, "name"))))[ @(size(get(d, "name")))[ nm = get(d, "name") ] ]
+    @(not(replace))[
+      {r} = H.newProject(nm, false)
+      @(neq(r, true))[
+        ok = false
+        @(eq(r, "full"))[ toast("You can keep 8 projects. Delete one first, or use Replace this project.") ][
+          toast("Your browser's storage is full, so nothing was imported.")
+        ]
+      ]
+    ]
+    @(ok)[
+      put(H.files, "game", get(d, "game"))
+      @(has(d, "engine"))[ put(H.files, "engine", get(d, "engine")) ]
+      @(has(d, "compiler"))[ put(H.files, "compiler", get(d, "compiler")) ]
+      {added} = eeAddPacks(d)
+      H.autosave()
+      reloadAll()
+      eeIn.value = ""
+      eePending = false
+      eeErr = ""
+      eeArmed = false
+      eeRenderNote()
+      eeRenderExport()
+      setView("play")
+      {msg} = join("Imported ", quote(nm), ".")
+      @(replace)[ msg = join("Replaced the open project with ", quote(nm), ".") ]
+      @(gt(added, 0))[ msg = join(msg, " ", eePlural(added, "pack was", "packs were"), " added turned off. Read them in the Packs view, then turn them on.") ]
+      toast(msg)
+    ]
+  ]
+]
+
+// Replacing takes two taps: the first turns the button red, and it goes back by itself after a few seconds.
+#eeReplace[
+  @(eePending)[
+    @(not(eeArmed))[
+      eeArmed = true
+      eeArmId = add(eeArmId, 1)
+      {mine} = eeArmId
+      later(4000, #[ @(and(eeArmed, eq(mine, eeArmId)))[
+        eeArmed = false
+        eeRenderNote()
+      ] ])
+      eeRenderNote()
+    ][ eeApply(true) ]
+  ]
+]
+
+// Called when the Easy Export tab is opened.
+#eeOpen[
+  eeArmed = false
+  eeRenderExport()
+  eeRenderNote()
+]
+
+// ---------- building the tab ----------
+#eeInstall[
+  @(not(dom("#easyexport")))[
+    {d} = doc()
+    {st} = make("style")
+    st.textContent = eeCss()
+    d.head.appendChild(st)
+
+    {nav} = dom(".views")
+    {tabBtn} = make("button")
+    tabBtn.setAttribute("role", "tab")
+    tabBtn.setAttribute("aria-selected", "false")
+    tabBtn.dataset.view = "easyexport"
+    tabBtn.textContent = "Easy Export"
+    nav.insertBefore(tabBtn, nav.lastElementChild)
+    on(tabBtn, "click", #(e)[ later(40, #[ eeOpen() ]) ])
+
+    {pane} = make("section")
+    pane.id = "easyexport"
+    pane.className = "audio-pane"
+    pane.setAttribute("aria-label", "Easy Export")
+    dom("#main").appendChild(pane)
+
+    {scroll} = eeAdd(pane, "div", "a-scroll", "")
+    {wrap} = eeAdd(scroll, "div", "ee-wrap", "")
+
+    {exp} = eeAdd(wrap, "div", "ee-card", "")
+    eeAdd(exp, "div", "ee-h", "Export this project")
+    eeAdd(exp, "div", "ee-note", "One line of text that holds your project. Keep it somewhere safe, or send it to a friend.")
+    eeSum = eeAdd(exp, "div", "ee-note", "")
+    eeAdd(exp, "div", "ee-label", "Include")
+    eeBox = eeAdd(exp, "div", "", "")
+    eeOut = eeAdd(exp, "textarea", "ee-area", "")
+    eeOut.readOnly = true
+    eeOut.setAttribute("aria-label", "Export line")
+    eeOut.style.marginTop = "10px"
+    on(eeOut, "focus", #(e)[ eeOut.select() ])
+    {outRow} = eeAdd(exp, "div", "ee-row", "")
+    eeButton(outRow, "Copy", #(e)[ eeCopy() ])
+    eeButton(outRow, "Save as file", #(e)[ eeSaveFile() ])
+    eeSize = eeAdd(outRow, "span", "ee-size", "")
+
+    {imp} = eeAdd(wrap, "div", "ee-card", "")
+    eeAdd(imp, "div", "ee-h", "Import")
+    eeAdd(imp, "div", "ee-note", "Paste a line made by Easy Export, or open a file you saved.")
+    eeIn = eeAdd(imp, "textarea", "ee-area", "")
+    eeIn.setAttribute("aria-label", "Paste an export line here")
+    eeIn.placeholder = "abyss1:..."
+    on(eeIn, "input", #(e)[ eeCheckInput() ])
+    {inRow} = eeAdd(imp, "div", "ee-row", "")
+    eeButton(inRow, "Open file", #(e)[ eeOpenFile() ])
+    eeNote = eeAdd(imp, "div", "ee-note", "")
+    eeNote.style.marginTop = "8px"
+    {goRow} = eeAdd(imp, "div", "ee-row", "")
+    eeNewBtn = eeButton(goRow, "Import as new project", #(e)[ eeApply(false) ])
+    eeRepBtn = eeButton(goRow, "Replace this project", #(e)[ eeReplace() ])
+    eeNewBtn.disabled = true
+    eeRepBtn.disabled = true
+  ]
+  true
+]
+
+{eeInstalled} = eeInstall()
