@@ -1,0 +1,380 @@
+//@ pack Debug Tools (engine)
+//@ target engine
+// Ways to look at your game while it runs. Everything is off until you switch it on (with the
+// "Debug Panel (UI)" pack, or from code with debugSet), and none of it runs in an exported game.
+//
+//   Stats        frames per second, how often #update and #draw run and how long they take
+//   Grid         lines every 8, 16, 32 or 64 pixels, with the coordinates written along the edges
+//   Tap          tap or click the game: a crosshair stays where you tapped, with its x and y
+//   Shapes       every overlap(...) test drawn as two boxes (red when they hit), plus anything
+//                your game draws with debugRect, debugDot and debugLine
+//   Watch        values your game sends to debugWatch, written on the screen
+//   Pause        freezes #update and timers (drawing carries on), and Step moves on one frame
+//   Slow motion  #update runs on every 2nd, 4th or 8th frame only
+//
+// Functions for your game code. They do nothing unless the option is on, so they can stay in:
+//
+//   debugWatch("score", score)             shows  score: 120  on the screen. Call it from #update or #draw
+//   debugRect(x, y, w, h, color)           an outline. Call it from #draw (or #update)
+//   debugDot(x, y, color)                  a small cross
+//   debugLine(x1, y1, x2, y2, color)       a line
+//   debugOn("grid")                        true if that option is on
+//   debugSet("shapes", true)               switch an option on or off from code
+//   debugPause(true)                       pause the game from code, say when something goes wrong
+//
+// Options: "fps", "touch", "grid" (0 or a pixel size), "shapes", "watch", "paused", "speed" (1, 0.5, 0.25 or 0.125).
+// The color of debugRect, debugDot and debugLine is optional.
+//
+// Dependencies: none. The "Debug Panel (UI)" pack depends on this one: it switches these options
+// on and off through the browser's saved settings (the key abyss-engine:debug).
+// This pack replaces #frame and #overlap and adds functions that start with debug or dbg.
+// It changes only a few lines of each, so it works with stack-a-pack. To keep it out of a finished
+// game, turn it off before you export.
+
+{DEBUG_KEY} = "abyss-engine:debug"
+{dbgPlay} = dbgIsPlay()
+{dbgOpt} = dbgDefaults()
+{dbgRaw} = ""
+{dbgTicks} = 0
+{dbgStepSeen} = 0
+{dbgAcc} = 0
+{dbgFresh} = false
+{dbgPhase} = false
+{dbgHeld} = list()
+{dbgNextHeld} = list()
+{dbgNow} = list()
+{dbgWatch} = map()
+{dbgTouchX} = 0
+{dbgTouchY} = 0
+{dbgTouchSeen} = false
+{dbgUpdMs} = 0
+{dbgDrawMs} = 0
+{dbgUpdN} = 0
+{dbgDrawN} = 0
+{dbgUpdRate} = 0
+{dbgDrawRate} = 0
+{dbgSampleAt} = 0
+
+// ---------- settings ----------
+
+// A game that has been exported (play mode) never shows debug tools.
+#dbgIsPlay[
+  {d} = doc()
+  eq(d.documentElement.getAttribute("data-abyss-mode"), "play")
+]
+
+#dbgDefaults[
+  {d} = map()
+  d.fps = false
+  d.touch = false
+  d.grid = 0
+  d.shapes = false
+  d.watch = false
+  d.paused = false
+  d.speed = 1
+  d.step = 0
+  d
+]
+
+#dbgSave[
+  @(not(dbgPlay))[
+    dbgRaw = jsonWrite(dbgOpt)
+    storeSet(DEBUG_KEY, dbgRaw)
+  ]
+]
+
+// Reads the saved settings when they have changed.
+#dbgPoll[
+  {raw} = storeGet(DEBUG_KEY)
+  @(neq(raw, dbgRaw))[
+    dbgRaw = raw
+    @(raw)[
+      {m} = jsonRead(raw)
+      @(m)[ %(keys(m), k)[ put(dbgOpt, k, get(m, k)) ] ]
+    ]
+    // A speed has to be a number from 1/16 up to 1, and a step count a number.
+    @(not(gt(dbgOpt.speed, 0)))[ dbgOpt.speed = 1 ]
+    dbgOpt.speed = max(0.0625, min(1, dbgOpt.speed))
+    @(not(gte(dbgOpt.step, 0)))[ dbgOpt.step = 0 ]
+  ]
+]
+
+#debugOn(name)[
+  {on} = false
+  @(has(dbgOpt, name))[ on = get(dbgOpt, name) ]
+  @(on)[ true ][ false ]
+]
+
+#debugSet(name, value)[
+  put(dbgOpt, name, value)
+  dbgSave()
+  value
+]
+
+#debugPause(on)[ debugSet("paused", on) ]
+
+// ---------- called by the main loop ----------
+
+// Runs at the start of every #frame. Gives true when the game should move forward this frame,
+// and false while it is paused or being slowed down.
+#debugTick[
+  dbgTicks = add(dbgTicks, 1)
+  {go} = true
+  @(not(dbgPlay))[
+    // Every run starts unpaused. After that, settings are read about 10 times a second, or every frame while paused.
+    @(eq(dbgTicks, 1))[
+      dbgPoll()
+      @(dbgOpt.paused)[ debugSet("paused", false) ]
+    ][
+      @(or(dbgOpt.paused, eq(mod(dbgTicks, 6), 0)))[ dbgPoll() ]
+    ]
+    @(dbgOpt.paused)[
+      go = false
+      // Each tap on Step adds one to step. Every one moves the game on a single frame.
+      @(lt(dbgStepSeen, dbgOpt.step))[
+        dbgStepSeen = add(dbgStepSeen, 1)
+        go = true
+      ]
+    ][
+      dbgStepSeen = dbgOpt.step
+      @(lt(dbgOpt.speed, 1))[
+        dbgAcc = add(dbgAcc, dbgOpt.speed)
+        @(gte(dbgAcc, 1))[ dbgAcc = sub(dbgAcc, 1) ][ go = false ]
+      ]
+    ]
+    // Once a second, work out how often update and draw ran.
+    {now} = time()
+    @(gte(sub(now, dbgSampleAt), 1))[
+      {span} = sub(now, dbgSampleAt)
+      dbgUpdRate = round(div(dbgUpdN, span))
+      dbgDrawRate = round(div(dbgDrawN, span))
+      dbgUpdN = 0
+      dbgDrawN = 0
+      dbgSampleAt = now
+    ]
+  ]
+  go
+]
+
+// The game's #update, timed. Shapes it makes are kept until the next update, so they stay on screen while paused.
+#debugUpdate[
+  {t0} = time()
+  dbgNextHeld = list()
+  dbgPhase = true
+  game.update()
+  dbgPhase = false
+  dbgHeld = dbgNextHeld
+  dbgUpdMs = add(mul(dbgUpdMs, 0.9), mul(sub(time(), t0), 100))
+  dbgUpdN = add(dbgUpdN, 1)
+]
+
+// The game's #draw, timed.
+#debugDraw[
+  {t0} = time()
+  game.draw()
+  dbgDrawMs = add(mul(dbgDrawMs, 0.9), mul(sub(time(), t0), 100))
+  dbgDrawN = add(dbgDrawN, 1)
+  dbgFresh = true
+]
+
+// ---------- shapes ----------
+
+#dbgAdd(shape)[
+  @(dbgPhase)[
+    @(lt(size(dbgNextHeld), 400))[ push(dbgNextHeld, shape) ]
+  ][
+    @(lt(size(dbgNow), 400))[ push(dbgNow, shape) ]
+  ]
+]
+
+#dbgColor(color)[
+  @(color)[ color ][ "#ffe14d" ]
+]
+
+#debugRect(x, y, w, h, color)[
+  @(dbgOpt.shapes)[ dbgAdd(list("rect", x, y, w, h, dbgColor(color))) ]
+]
+
+#debugDot(x, y, color)[
+  @(dbgOpt.shapes)[ dbgAdd(list("dot", x, y, 0, 0, dbgColor(color))) ]
+]
+
+#debugLine(x1, y1, x2, y2, color)[
+  @(dbgOpt.shapes)[ dbgAdd(list("line", x1, y1, x2, y2, dbgColor(color))) ]
+]
+
+// Every overlap test, so you can see what is being checked against what.
+#debugHit(ax, ay, aw, ah, bx, by, bw, bh, hit)[
+  @(dbgOpt.shapes)[ dbgAdd(list("hit", ax, ay, aw, ah, bx, by, bw, bh, hit)) ]
+]
+
+#debugWatch(label, value)[ put(dbgWatch, label, value) ]
+
+// ---------- drawing the overlay ----------
+
+#dbgOutline(x, y, w, h, c)[
+  drawRect(x, y, w, 1, c)
+  drawRect(x, sub(add(y, h), 1), w, 1, c)
+  drawRect(x, y, 1, h, c)
+  drawRect(sub(add(x, w), 1), y, 1, h, c)
+]
+
+#dbgDrawShape(s)[
+  {kind} = get(s, 0)
+  @(eq(kind, "rect"))[ dbgOutline(get(s, 1), get(s, 2), get(s, 3), get(s, 4), get(s, 5)) ]
+  @(eq(kind, "dot"))[
+    {x} = get(s, 1)
+    {y} = get(s, 2)
+    drawRect(sub(x, 3), y, 7, 1, get(s, 5))
+    drawRect(x, sub(y, 3), 1, 7, get(s, 5))
+  ]
+  @(eq(kind, "line"))[ drawLine(get(s, 1), get(s, 2), get(s, 3), get(s, 4), get(s, 5), 1) ]
+  @(eq(kind, "hit"))[
+    {c1} = "rgba(255, 255, 255, 0.85)"
+    {c2} = "rgba(255, 240, 150, 0.85)"
+    @(get(s, 9))[
+      drawRect(get(s, 1), get(s, 2), get(s, 3), get(s, 4), "rgba(255, 60, 90, 0.35)")
+      drawRect(get(s, 5), get(s, 6), get(s, 7), get(s, 8), "rgba(255, 60, 90, 0.35)")
+      c1 = "#ff3d5a"
+      c2 = "#ff3d5a"
+    ]
+    dbgOutline(get(s, 1), get(s, 2), get(s, 3), get(s, 4), c1)
+    dbgOutline(get(s, 5), get(s, 6), get(s, 7), get(s, 8), c2)
+  ]
+]
+
+#dbgDrawShapes[
+  %(dbgHeld, s)[ dbgDrawShape(s) ]
+  %(dbgNow, s)[ dbgDrawShape(s) ]
+]
+
+// Lines every grid pixels. Every 4th line is stronger and has its number written next to it.
+#dbgDrawGrid[
+  {g} = dbgOpt.grid
+  {w} = screenWidth()
+  {h} = screenHeight()
+  %(add(floor(div(w, g)), 1), i)[
+    {major} = eq(mod(i, 4), 0)
+    {c} = "rgba(255, 255, 255, 0.14)"
+    @(major)[ c = "rgba(255, 255, 255, 0.32)" ]
+    drawRect(mul(i, g), 0, 1, h, c)
+    @(and(major, gt(i, 0)))[ drawText(mul(i, g), add(mul(i, g), 2), sub(h, 10), "rgba(255, 255, 255, 0.7)", 8) ]
+  ]
+  %(add(floor(div(h, g)), 1), j)[
+    {major} = eq(mod(j, 4), 0)
+    {c} = "rgba(255, 255, 255, 0.14)"
+    @(major)[ c = "rgba(255, 255, 255, 0.32)" ]
+    drawRect(0, mul(j, g), w, 1, c)
+    @(and(major, gt(j, 0)))[ drawText(mul(j, g), 2, add(mul(j, g), 2), "rgba(255, 255, 255, 0.7)", 8) ]
+  ]
+]
+
+// A crosshair where the last tap or click was.
+#dbgDrawTouch[
+  @(dbgTouchSeen)[
+    {x} = dbgTouchX
+    {y} = dbgTouchY
+    drawRect(0, round(y), screenWidth(), 1, "rgba(255, 225, 77, 0.55)")
+    drawRect(round(x), 0, 1, screenHeight(), "rgba(255, 225, 77, 0.55)")
+    drawCircle(x, y, 3, "rgba(255, 225, 77, 0.9)")
+    {t} = join(round(x), ", ", round(y))
+    {w} = add(textWidth(t, 9), 6)
+    {lx} = add(x, 8)
+    @(gt(add(lx, w), screenWidth()))[ lx = sub(x, add(w, 8)) ]
+    {ly} = sub(y, 14)
+    @(lt(ly, 0))[ ly = add(y, 8) ]
+    drawRect(lx, ly, w, 12, "rgba(6, 14, 22, 0.85)")
+    drawText(t, add(lx, 3), add(ly, 2), "#ffe14d", 9)
+  ]
+]
+
+// The lines of text in the corner: the stats, then the watched values.
+#dbgLines[
+  {l} = list()
+  @(dbgOpt.fps)[
+    push(l, join("fps ", fps(), "  frame ", frameCount))
+    push(l, join("update ", dbgUpdRate, "/s  ", round(dbgUpdMs, 2), " ms"))
+    @(game.draw)[ push(l, join("draw ", dbgDrawRate, "/s  ", round(dbgDrawMs, 2), " ms")) ]
+    push(l, join("screen ", screenWidth(), "x", screenHeight()))
+  ]
+  @(and(dbgOpt.watch, size(dbgWatch)))[
+    %(keys(dbgWatch), k)[ push(l, join(k, ": ", slice(join(get(dbgWatch, k)), 0, 26))) ]
+  ]
+  l
+]
+
+#dbgDrawPanel[
+  {l} = dbgLines()
+  @(size(l))[
+    {w} = 0
+    %(l, t)[ w = max(w, textWidth(t, 9)) ]
+    drawRect(2, 2, add(w, 8), add(mul(size(l), 11), 5), "rgba(6, 14, 22, 0.8)")
+    %(size(l), i)[ drawText(get(l, i), 6, add(4, mul(i, 11)), "#c9f6ff", 9) ]
+  ]
+]
+
+#dbgSpeedText[ join("1/", round(div(1, dbgOpt.speed))) ]
+
+// PAUSED or SLOW in the top right corner. It is solid, so drawing it again and again changes nothing.
+#dbgDrawBadge[
+  {t} = ""
+  @(dbgOpt.paused)[ t = "PAUSED" ][
+    @(lt(dbgOpt.speed, 1))[ t = join("SLOW ", dbgSpeedText()) ]
+  ]
+  @(t)[
+    {w} = add(textWidth(t, 9), 8)
+    drawRect(sub(screenWidth(), add(w, 2)), 2, w, 13, "#7a1f33")
+    drawText(t, sub(screenWidth(), sub(w, 2)), 4, "#ffffff", 9)
+  ]
+]
+
+// Draws everything on top of the game. It only draws on top of a picture that was just made,
+// so the see-through parts never pile up when the game isn't redrawing.
+#debugOverlay[
+  @(not(dbgPlay))[
+    {fresh} = dbgFresh
+    dbgFresh = false
+    @(touching())[
+      dbgTouchX = touchX()
+      dbgTouchY = touchY()
+      dbgTouchSeen = true
+    ]
+    @(fresh)[
+      @(gt(dbgOpt.grid, 1))[ dbgDrawGrid() ]
+      @(dbgOpt.shapes)[ dbgDrawShapes() ]
+      @(dbgOpt.touch)[ dbgDrawTouch() ]
+      dbgDrawPanel()
+    ]
+    dbgNow = list()
+    dbgDrawBadge()
+  ]
+]
+
+// ---------- Abyss Engine's own functions, with a few lines changed ----------
+
+#overlap(ax, ay, aw, ah, bx, by, bw, bh)[
+  {hit} = and(lt(ax, add(bx, bw)), lt(bx, add(ax, aw)), lt(ay, add(by, bh)), lt(by, add(ay, ah)))
+  debugHit(ax, ay, aw, ah, bx, by, bw, bh, hit)
+  hit
+]
+
+#frame[
+  {go} = debugTick()
+  @(go)[ frameCount = add(frameCount, 1) ]
+  padInput()
+  @(go)[ %(timers, t)[ t.tick() ] ]
+  timers = keep(timers, #(t)[ not(t.done) ])
+  clipToGame(true)
+  @(and(go, game.update))[ debugUpdate() ]
+  @(game.draw)[
+    drawDebt = add(drawDebt, div(add(fps(), 10), 60))
+    %(gte(drawDebt, 1))[
+      debugDraw()
+      drawDebt = sub(drawDebt, 1)
+    ]
+  ]
+  @(not(game.draw))[ dbgFresh = go ]
+  debugOverlay()
+  clipToGame(false)
+  padDraw()
+]

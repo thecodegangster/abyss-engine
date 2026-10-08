@@ -1,0 +1,252 @@
+//@ pack Debug Panel (UI)
+//@ target ui
+// A strip under the game with the debug options, so you can look at your game while it runs.
+//
+//   Pause / Resume   freezes the game (it keeps drawing, so overlays still show). F8 does it too.
+//   Step             moves a paused game on exactly one frame. From a running game it pauses, then steps. F10 does it too.
+//   Debug            opens the rest of the strip:
+//   Speed            1x, 1/2, 1/4 or 1/8 of normal speed
+//   Stats            frames per second, how often update and draw run, and how long they take
+//   Tap              tap or click the game to leave a crosshair with its x and y
+//   Shapes           draws every overlap(...) test (red when they hit) and what debugRect, debugDot and debugLine ask for
+//   Watch            shows the values your game sends to debugWatch("name", value)
+//   Grid             lines every 8, 16, 32 or 64 pixels with the coordinates written along the edges
+//   All off          switches every option off and goes back to full speed
+//
+// The options are remembered in this browser. A game always starts unpaused when you tap Run.
+// After you turn the pack on, it starts working the next time Abyss Engine loads.
+//
+// Dependencies: Debug Tools (engine). That pack is what draws the overlays and pauses the game.
+// This panel only changes the saved settings (the key abyss-engine:debug) that it reads, so turn
+// on Debug Tools (engine) too. If it is off, the panel says so.
+// This pack only adds things. It does not replace any of the UI's own functions. Every name it adds starts with dp.
+
+{DP_KEY} = "abyss-engine:debug"
+{DP_OPEN_KEY} = "abyss-engine:debug-panel"
+{DP_GRIDS} = list(0, 8, 16, 32, 64)
+{dpOpt} = dpDefaults()
+{dpRaw} = ""
+{dpOpen} = dpLoadOpen()
+{dpPanel} = false
+{dpBody} = false
+{dpNote} = false
+{dpToggle} = false
+{dpBtns} = map()
+{dpSpeeds} = map()
+
+// ---------- the saved settings ----------
+
+#dpDefaults[
+  {d} = map()
+  d.fps = false
+  d.touch = false
+  d.grid = 0
+  d.shapes = false
+  d.watch = false
+  d.paused = false
+  d.speed = 1
+  d.step = 0
+  d
+]
+
+// Reads the settings again if they changed (the game can change them too). Gives true when they did.
+#dpRead[
+  {raw} = storeGet(DP_KEY)
+  {changed} = neq(raw, dpRaw)
+  @(changed)[
+    dpRaw = raw
+    dpOpt = dpDefaults()
+    @(raw)[
+      {m} = jsonRead(raw)
+      @(m)[ %(keys(m), k)[ put(dpOpt, k, get(m, k)) ] ]
+    ]
+  ]
+  changed
+]
+
+#dpWrite(key, value)[
+  dpRead()
+  put(dpOpt, key, value)
+  dpRaw = jsonWrite(dpOpt)
+  storeSet(DP_KEY, dpRaw)
+  dpSync()
+]
+
+#dpLoadOpen[ eq(storeGet(DP_OPEN_KEY), "open") ]
+
+// ---------- is the engine pack there? ----------
+
+#dpEngineOn[
+  {ok} = false
+  @(H)[
+    @(H.packs)[
+      @(not(H.packs.safe()))[
+        %(H.packs.all(), p)[
+          @(and(get(p, "on"), eq(get(p, "target"), "engine")))[
+            @(gte(find(H.packs.code(get(p, "id")), "#debugTick"), 0))[ ok = true ]
+          ]
+        ]
+      ]
+    ]
+  ]
+  ok
+]
+
+// ---------- what the buttons do ----------
+
+#dpPause[ dpWrite("paused", not(dpOpt.paused)) ]
+
+// Each Step adds one to step. The engine moves the game on one frame for every one.
+#dpStep[
+  dpRead()
+  put(dpOpt, "paused", true)
+  dpWrite("step", add(dpOpt.step, 1))
+]
+
+#dpFlip(key)[ dpWrite(key, not(get(dpOpt, key))) ]
+
+#dpNextGrid[
+  {at} = 0
+  %(size(DP_GRIDS), i)[ @(eq(get(DP_GRIDS, i), dpOpt.grid))[ at = i ] ]
+  dpWrite("grid", get(DP_GRIDS, mod(add(at, 1), size(DP_GRIDS))))
+]
+
+#dpAllOff[
+  dpRead()
+  dpOpt = dpDefaults()
+  dpRaw = jsonWrite(dpOpt)
+  storeSet(DP_KEY, dpRaw)
+  dpSync()
+]
+
+// ---------- showing the state ----------
+
+#dpOnOff(el, on)[
+  @(on)[ el.dataset.on = "yes" ][ el.dataset.on = "no" ]
+]
+
+#dpSync[
+  @(dpPanel)[
+    {pb} = get(dpBtns, "pause")
+    @(dpOpt.paused)[ pb.textContent = "Resume" ][ pb.textContent = "Pause" ]
+    dpOnOff(pb, dpOpt.paused)
+    %(keys(dpSpeeds), k)[ dpOnOff(get(dpSpeeds, k), lt(abs(sub(dpOpt.speed, number(k))), 0.001)) ]
+    %(list("fps", "touch", "shapes", "watch"), k)[ dpOnOff(get(dpBtns, k), get(dpOpt, k)) ]
+    {gb} = get(dpBtns, "grid")
+    {gridLabel} = "Grid off"
+    @(gt(dpOpt.grid, 0))[ gridLabel = join("Grid ", dpOpt.grid) ]
+    gb.textContent = gridLabel
+    dpOnOff(gb, gt(dpOpt.grid, 0))
+    dpNote.hidden = dpEngineOn()
+  ]
+]
+
+// ---------- building the strip ----------
+
+#dpCss[
+  {r} = list()
+  push(r, ".dp{flex:none;display:flex;flex-direction:column;gap:6px;padding:6px 8px;background:var(--trench);border-top:1px solid var(--line)}")
+  push(r, ".dp-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}")
+  push(r, ".dp-body{display:flex;flex-direction:column;gap:6px}")
+  push(r, ".dp-btn{height:32px;min-width:34px;padding:0 11px;border-radius:9px;background:var(--reef);color:var(--foam);font-weight:650;font-size:13px}")
+  push(r, ".dp-btn[data-on=yes]{background:var(--skin);color:#fff}")
+  push(r, ".dp-title{font-weight:750;font-size:13px}")
+  push(r, ".dp-label{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--mist);margin-right:2px}")
+  push(r, ".dp-note{font-size:12.5px;color:#ffd6de;background:#3a1622;border-radius:8px;padding:6px 8px}")
+  push(r, ".dp-gap{flex:1}")
+  joinList(r, "\n")
+]
+
+#dpAdd(parent, tag, cls, label)[
+  {el} = make(tag)
+  el.className = cls
+  el.textContent = label
+  parent.appendChild(el)
+  el
+]
+
+#dpButton(parent, label, fn)[
+  {b} = dpAdd(parent, "button", "dp-btn", label)
+  b.type = "button"
+  b.dataset.on = "no"
+  on(b, "click", fn)
+  b
+]
+
+#dpShowOpen[
+  dpBody.hidden = not(dpOpen)
+  @(dpOpen)[ dpToggle.textContent = "Debug ▴" ][ dpToggle.textContent = "Debug ▾" ]
+]
+
+#dpInstall[
+  @(not(dom("#dpPanel")))[
+    {d} = doc()
+    {st} = make("style")
+    st.textContent = dpCss()
+    d.head.appendChild(st)
+
+    dpPanel = make("div")
+    dpPanel.id = "dpPanel"
+    dpPanel.className = "dp"
+    dom(".stage-pane").insertBefore(dpPanel, dom("#log"))
+
+    {head} = dpAdd(dpPanel, "div", "dp-row", "")
+    dpToggle = dpButton(head, "Debug ▾", #(e)[
+      dpOpen = not(dpOpen)
+      storeSet(DP_OPEN_KEY, "closed")
+      @(dpOpen)[ storeSet(DP_OPEN_KEY, "open") ]
+      dpShowOpen()
+    ])
+    dpToggle.dataset.on = "no"
+    put(dpBtns, "pause", dpButton(head, "Pause", #(e)[ dpPause() ]))
+    put(dpBtns, "step", dpButton(head, "Step", #(e)[ dpStep() ]))
+
+    dpBody = dpAdd(dpPanel, "div", "dp-body", "")
+    {speedRow} = dpAdd(dpBody, "div", "dp-row", "")
+    dpAdd(speedRow, "span", "dp-label", "Speed")
+    %(list(list("1", "1x"), list("0.5", "1/2"), list("0.25", "1/4"), list("0.125", "1/8")), sp)[
+      {value} = number(get(sp, 0))
+      put(dpSpeeds, get(sp, 0), dpButton(speedRow, get(sp, 1), #(e)[ dpWrite("speed", value) ]))
+    ]
+
+    {showRow} = dpAdd(dpBody, "div", "dp-row", "")
+    dpAdd(showRow, "span", "dp-label", "Show")
+    put(dpBtns, "fps", dpButton(showRow, "Stats", #(e)[ dpFlip("fps") ]))
+    put(dpBtns, "touch", dpButton(showRow, "Tap", #(e)[ dpFlip("touch") ]))
+    put(dpBtns, "shapes", dpButton(showRow, "Shapes", #(e)[ dpFlip("shapes") ]))
+    put(dpBtns, "watch", dpButton(showRow, "Watch", #(e)[ dpFlip("watch") ]))
+    put(dpBtns, "grid", dpButton(showRow, "Grid off", #(e)[ dpNextGrid() ]))
+    dpButton(showRow, "All off", #(e)[ dpAllOff() ])
+
+    dpNote = dpAdd(dpBody, "div", "dp-note", "Turn on the Debug Tools (engine) pack in the Packs view, then tap Run. Until then these buttons do nothing.")
+    dpNote.hidden = true
+
+    // F8 pauses or resumes, F10 steps, even while you are typing code.
+    on(d, "keydown", #(e)[
+      @(eq(e.key, "F8"))[
+        e.preventDefault()
+        dpPause()
+      ]
+      @(eq(e.key, "F10"))[
+        e.preventDefault()
+        dpStep()
+      ]
+    ])
+
+    dpRead()
+    dpShowOpen()
+    dpSync()
+    dpTick()
+  ]
+  true
+]
+
+// Keeps the buttons right when the engine or your game changes the settings (every Run starts unpaused).
+#dpTick[
+  later(300, #[
+    @(dpRead())[ dpSync() ][ @(dpPanel)[ dpNote.hidden = dpEngineOn() ] ]
+    dpTick()
+  ])
+]
+
+{dpInstalled} = dpInstall()

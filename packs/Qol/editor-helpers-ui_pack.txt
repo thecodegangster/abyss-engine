@@ -1,0 +1,735 @@
+//@ pack Editor Helpers (UI)
+//@ target ui
+// Three small helpers for the code editor.
+//
+//   Matching brackets   Put the cursor next to ( ) [ ] or { } and its partner lights up. A bracket with
+//                       no partner lights up red. Brackets inside "text" and // notes are ignored.
+//   Auto-close          Typing ( [ { or " also types the closing one and puts the cursor between them.
+//                       Typing the closing one over it just moves past it. Backspace in an empty pair
+//                       removes both. Select some code and type ( to wrap it.
+//   Name suggestions    While you type a name, a list shows built-ins and the functions, variables and
+//                       words from your Engine and Game code. Tab takes the top one. Use the up and down
+//                       arrows then Enter to pick another, or tap one. Esc closes the list. Picking a
+//                       function types its ( ) too. It stays quiet inside "text" and // notes, and when
+//                       you are naming something new right after # or {.
+//
+// File > Editor helpers has a switch for each one. They are remembered in this browser.
+// After you turn the pack on, it starts working the next time Abyss Engine loads.
+//
+// Dependencies: none. It only uses Abyss Engine's own UI code, and every name it adds starts with eh.
+// This pack only adds things. It does not replace any of the UI's own functions, so it works with
+// the other UI packs, like Appearance (UI).
+
+{EH_KEY} = "abyss-engine:editor-helpers"
+{EH_NAME} = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"
+{EH_LETTERS} = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+{EH_DIGITS} = "0123456789"
+{EH_BS} = slice(quote("\""), 1, 2)
+{EH_WORDS} = list("true", "false", "me")
+{ehSet} = ehLoad()
+{ehLayer} = false
+{ehPop} = false
+{ehPaintText} = false
+{ehPaintS} = -1
+{ehPaintE} = -1
+{ehDirty} = true
+{ehPairText} = false
+{ehPairs} = map()
+{ehItems} = list()
+{ehSel} = 0
+{ehPicked} = false
+{ehStart} = 0
+{ehAt} = -1
+{ehPopText} = false
+{ehOpen} = false
+{ehPending} = false
+{ehTimer} = 0
+{ehSigs} = false
+{ehCache} = map()
+{ehMenu} = map()
+
+// ---------- settings ----------
+
+#ehDefaults[
+  {d} = map()
+  d.match = true
+  d.close = true
+  d.suggest = true
+  d
+]
+
+#ehLoad[
+  {d} = ehDefaults()
+  {raw} = storeGet(EH_KEY)
+  @(raw)[
+    {saved} = jsonRead(raw)
+    @(saved)[
+      %(keys(d), k)[ @(has(saved, k))[ put(d, k, eq(get(saved, k), true)) ] ]
+    ]
+  ]
+  d
+]
+
+#ehSave[ storeSet(EH_KEY, jsonWrite(ehSet)) ]
+
+// ---------- reading code ----------
+
+// The letter at i, or "" past either end.
+#ehCh(v, i)[ slice(v, i, add(i, 1)) ]
+#ehIsName(c)[ and(neq(c, ""), has(EH_NAME, c)) ]
+#ehIsBracket(c)[ and(neq(c, ""), has("([{}])", c)) ]
+
+// What the closing partner of ( [ { or " is, or false.
+#ehCloser(c)[
+  {k} = find("([{\"", c)
+  @(gte(k, 0))[ ehCh(")]}\"", k) ][ false ]
+]
+
+#ehAllName(t)[
+  {ok} = gt(size(t), 0)
+  %(size(t), i)[ @(not(ehIsName(ehCh(t, i))))[ ok = false ] ]
+  ok
+]
+
+// Is the spot at pos in code, in "text" or in a // note? Strings and notes never cross a line,
+// so only the start of the line up to pos matters.
+#ehState(v, pos)[
+  {ls} = 0
+  @(gt(pos, 0))[ ls = add(findLast(v, "\n", sub(pos, 1)), 1) ]
+  {state} = "code"
+  {i} = ls
+  %(lt(i, pos))[
+    {c} = ehCh(v, i)
+    @(eq(state, "str"))[
+      @(and(eq(c, EH_BS), lt(add(i, 1), pos)))[ i = add(i, 1) ]
+      @(eq(c, "\""))[ state = "code" ]
+    ][
+      @(eq(c, "\""))[ state = "str" ][
+        @(and(eq(c, "/"), eq(ehCh(v, add(i, 1)), "/")))[
+          state = "com"
+          i = pos
+        ]
+      ]
+    ]
+    i = add(i, 1)
+  ]
+  state
+]
+
+// Finds the partner of every bracket in v and keeps it in ehPairs (position to position).
+// A bracket with no partner gets -1.
+#ehScan(v)[
+  ehPairText = v
+  ehPairs = map()
+  {stack} = list()
+  {lines} = split(v, "\n")
+  {base} = 0
+  %(size(lines), li)[
+    {line} = get(lines, li)
+    {n} = size(line)
+    {i} = 0
+    {inStr} = false
+    %(lt(i, n))[
+      {c} = ehCh(line, i)
+      @(inStr)[
+        @(and(eq(c, EH_BS), lt(add(i, 1), n)))[ i = add(i, 1) ]
+        @(eq(c, "\""))[ inStr = false ]
+      ][
+        @(eq(c, "\""))[ inStr = true ][
+          @(and(eq(c, "/"), eq(ehCh(line, add(i, 1)), "/")))[ i = n ][
+            @(has("([{", c))[ push(stack, add(base, i)) ]
+            @(has(")]}", c))[
+              {here} = add(base, i)
+              {k} = size(stack)
+              {matched} = false
+              @(gt(k, 0))[
+                {o} = get(stack, sub(k, 1))
+                @(eq(find("([{", ehCh(v, o)), find(")]}", c)))[
+                  pop(stack)
+                  put(ehPairs, o, here)
+                  put(ehPairs, here, o)
+                  matched = true
+                ]
+              ]
+              @(not(matched))[ put(ehPairs, here, -1) ]
+            ]
+          ]
+        ]
+      ]
+      i = add(i, 1)
+    ]
+    base = add(base, add(n, 1))
+  ]
+  %(stack, o)[ put(ehPairs, o, -1) ]
+  true
+]
+
+// ---------- the layer behind the code that shows the matching brackets ----------
+
+// Makes the layer's text the same as the code's, with a mark on the brackets and an empty
+// marker where the cursor is (the suggestion list is placed by it).
+#ehPaint(v, s, en)[
+  {cuts} = list()
+  @(and(ehSet.match, eq(s, en)))[
+    {t} = -1
+    @(ehIsBracket(ehCh(v, s)))[ t = s ][
+      @(ehIsBracket(ehCh(v, sub(s, 1))))[ t = sub(s, 1) ]
+    ]
+    @(gte(t, 0))[
+      @(neq(v, ehPairText))[ ehScan(v) ]
+      @(has(ehPairs, t))[
+        {o} = get(ehPairs, t)
+        @(gte(o, 0))[
+          push(cuts, list(min(t, o), "eh-hit"))
+          push(cuts, list(max(t, o), "eh-hit"))
+        ][ push(cuts, list(t, "eh-bad")) ]
+      ]
+    ]
+  ]
+  push(cuts, list(s, "c"))
+  // Put them in order of position. At the same spot the cursor marker goes first.
+  {n} = size(cuts)
+  %(n, a)[
+    %(sub(n, 1), b)[
+      {x} = get(cuts, b)
+      {y} = get(cuts, add(b, 1))
+      {swap} = gt(get(x, 0), get(y, 0))
+      @(and(eq(get(x, 0), get(y, 0)), neq(get(x, 1), "c"), eq(get(y, 1), "c")))[ swap = true ]
+      @(swap)[
+        put(cuts, b, y)
+        put(cuts, add(b, 1), x)
+      ]
+    ]
+  ]
+  {out} = list()
+  {at} = 0
+  %(cuts, cut)[
+    {p} = max(at, get(cut, 0))
+    push(out, escape(slice(v, at, p)))
+    at = p
+    @(eq(get(cut, 1), "c"))[ push(out, "<i class=\"eh-c\"></i>") ][
+      push(out, join("<mark class=\"", get(cut, 1), "\">", escape(slice(v, p, add(p, 1))), "</mark>"))
+      at = add(p, 1)
+    ]
+  ]
+  push(out, escape(slice(v, at, size(v))))
+  ehLayer.innerHTML = join(joinList(out, ""), "\n")
+]
+
+#ehSyncScroll[
+  ehLayer.scrollTop = ta.scrollTop
+  ehLayer.scrollLeft = ta.scrollLeft
+]
+
+// Brings the layer up to date with the code and the cursor. Cheap when nothing has changed.
+#ehRefresh[
+  @(and(ehLayer, not(editor.hidden)))[
+    {v} = ta.value
+    {s} = ta.selectionStart
+    {en} = ta.selectionEnd
+    @(or(ehDirty, neq(v, ehPaintText), neq(s, ehPaintS), neq(en, ehPaintE)))[
+      ehDirty = false
+      ehPaintText = v
+      ehPaintS = s
+      ehPaintE = en
+      ehPaint(v, s, en)
+    ]
+    ehSyncScroll()
+    // An open list stays while a new one is on its way, and goes if the cursor moves off or the text changes some other way.
+    @(and(ehOpen, not(ehPending), or(neq(s, ehAt), neq(v, ehPopText))))[ ehHide() ]
+  ]
+]
+
+// ---------- names to suggest ----------
+
+// The signatures in the Reference tab, like drawRect(x, y, w, h, color), by name.
+#ehGetSigs[
+  @(not(ehSigs))[
+    ehSigs = map()
+    %(domAll("#ref code"), el)[
+      {t} = el.textContent
+      {p} = find(t, "(")
+      @(gt(p, 0))[
+        {nm} = slice(t, 0, p)
+        @(and(ehAllName(nm), not(has(ehSigs, nm))))[ put(ehSigs, nm, t) ]
+      ]
+    ]
+  ]
+  ehSigs
+]
+
+// Puts rec in the map under name, unless the map already has something of a higher rank there.
+// (This is written as two steps because or(...) works out every one of its inputs, even when the first is enough.)
+#ehKeepBest(into, name, rec)[
+  {better} = not(has(into, name))
+  @(not(better))[ better = gt(get(rec, 0), get(get(into, name), 0)) ]
+  @(better)[ put(into, name, rec) ]
+]
+
+// Every name in some code, outside "text" and // notes. Gives a map from name to
+// list(rank, kind, signature): 3 for a function that is made with #, 2 for a variable made with { }, 1 for any other word.
+#ehWordsOf(src)[
+  {found} = map()
+  %(split(src, "\n"), line)[
+    {n} = size(line)
+    {i} = 0
+    {inStr} = false
+    %(lt(i, n))[
+      {c} = ehCh(line, i)
+      @(inStr)[
+        @(and(eq(c, EH_BS), lt(add(i, 1), n)))[ i = add(i, 1) ]
+        @(eq(c, "\""))[ inStr = false ]
+      ][
+        @(eq(c, "\""))[ inStr = true ][
+          @(and(eq(c, "/"), eq(ehCh(line, add(i, 1)), "/")))[ i = n ][
+            @(has(EH_LETTERS, c))[
+              {j} = add(i, 1)
+              %(and(lt(j, n), ehIsName(ehCh(line, j))))[ j = add(j, 1) ]
+              {w} = slice(line, i, j)
+              {before} = ehCh(line, sub(i, 1))
+              {rec} = false
+              @(and(eq(before, "#"), gt(size(w), 1)))[
+                {sig} = join(w, "()")
+                @(eq(ehCh(line, j), "("))[
+                  {close} = find(line, ")", j)
+                  @(gt(close, j))[ sig = join(w, slice(line, j, add(close, 1))) ]
+                ]
+                rec = list(3, "fn", sig)
+              ]
+              @(and(not(rec), eq(before, "{"), eq(ehCh(line, j), "}"), gt(size(w), 1)))[ rec = list(2, "var", w) ]
+              @(and(not(rec), gte(size(w), 3)))[ rec = list(1, "word", w) ]
+              @(rec)[ ehKeepBest(found, w, rec) ]
+              i = sub(j, 1)
+            ]
+          ]
+        ]
+      ]
+      i = add(i, 1)
+    ]
+  ]
+  found
+]
+
+// The pieces of code to read names from: the tab being edited, and the Engine and Game code.
+#ehSourceTexts[
+  {out} = list()
+  push(out, list("cur", ta.value))
+  @(eq(tab, "game"))[
+    %(size(gameTexts), i)[ @(neq(i, gameSel))[ push(out, list(join("g", i), get(gameTexts, i))) ] ]
+    push(out, list("engine", get(H.files, "engine")))
+  ][
+    @(eq(tab, "engine"))[ push(out, list("game", get(H.files, "game"))) ][
+      push(out, list("engine", get(H.files, "engine")))
+      push(out, list("game", get(H.files, "game")))
+    ]
+  ]
+  out
+]
+
+// All the names the project uses. Each piece of code is only read again when it has changed.
+#ehProject[
+  {all} = map()
+  %(ehSourceTexts(), pair)[
+    {key} = get(pair, 0)
+    {t} = get(pair, 1)
+    {c} = false
+    @(has(ehCache, key))[ c = get(ehCache, key) ]
+    @(or(not(c), neq(c.text, t)))[
+      c = map()
+      c.text = t
+      c.words = ehWordsOf(t)
+      put(ehCache, key, c)
+    ]
+    %(keys(c.words), w)[ ehKeepBest(all, w, get(c.words, w)) ]
+  ]
+  all
+]
+
+// Sorts a list of names, A to Z.
+#ehSorted(names)[
+  {out} = list()
+  %(names, nm)[
+    {at} = size(out)
+    // Move left while the name before is later in the alphabet. The check is nested because and(...) reads all its inputs.
+    {moving} = gt(at, 0)
+    %(moving)[
+      @(gt(lower(get(out, sub(at, 1))), lower(nm)))[
+        at = sub(at, 1)
+        moving = gt(at, 0)
+      ][ moving = false ]
+    ]
+    // Build the list again with nm slotted in at the right place.
+    {next} = list()
+    %(at, i)[ push(next, get(out, i)) ]
+    push(next, nm)
+    %(sub(size(out), at), i)[ push(next, get(out, add(at, i))) ]
+    out = next
+  ]
+  out
+]
+
+// An item in the suggestion list: its name, what to show next to it, what to type, and where the cursor ends up.
+#ehItem(name, kind, sig)[
+  {it} = map()
+  it.name = name
+  it.sig = sig
+  it.text = name
+  it.caret = size(name)
+  @(eq(kind, "fn"))[
+    it.text = join(name, "()")
+    {p} = find(sig, "(")
+    @(and(gte(p, 0), neq(ehCh(sig, add(p, 1)), ")")))[ it.caret = add(size(name), 1) ][ it.caret = add(size(name), 2) ]
+  ]
+  it
+]
+
+#ehStarts(name, prefix)[
+  and(gt(size(name), size(prefix)), eq(lower(slice(name, 0, size(prefix))), lower(prefix)))
+]
+
+// The names that start with what you have typed, best first: your own functions and variables,
+// then built-ins, then other words you have used. After a . only your own words are offered.
+#ehFind(prefix, members)[
+  {out} = list()
+  {seen} = map()
+  {proj} = ehProject()
+  {mine} = list()
+  {words} = list()
+  %(keys(proj), w)[
+    @(ehStarts(w, prefix))[
+      @(gt(get(get(proj, w), 0), 1))[ push(mine, w) ][ push(words, w) ]
+    ]
+  ]
+  %(ehSorted(mine), w)[
+    {rec} = get(proj, w)
+    push(out, ehItem(w, get(rec, 1), get(rec, 2)))
+    put(seen, w, true)
+  ]
+  @(not(members))[
+    {sigs} = ehGetSigs()
+    {built} = list()
+    %(builtins(), b)[ @(and(ehStarts(b, prefix), not(has(seen, b))))[ push(built, b) ] ]
+    %(EH_WORDS, b)[ @(and(ehStarts(b, prefix), not(has(seen, b))))[ push(built, b) ] ]
+    %(ehSorted(built), b)[
+      // true, false and me are words. Everything else the language gives you is a function.
+      {sig} = b
+      {kind} = "word"
+      @(not(has(EH_WORDS, b)))[
+        kind = "fn"
+        sig = join(b, "(...)")
+        @(has(sigs, b))[ sig = get(sigs, b) ]
+      ]
+      push(out, ehItem(b, kind, sig))
+      put(seen, b, true)
+    ]
+  ]
+  %(ehSorted(words), w)[
+    @(not(has(seen, w)))[
+      push(out, ehItem(w, "word", w))
+      put(seen, w, true)
+    ]
+  ]
+  slice(out, 0, 7)
+]
+
+// ---------- the suggestion list ----------
+
+#ehAdd(parent, tag, cls, label)[
+  {el} = make(tag)
+  el.className = cls
+  el.textContent = label
+  parent.appendChild(el)
+  el
+]
+
+#ehHide[
+  ehOpen = false
+  ehItems = list()
+  @(ehPop)[ ehPop.hidden = true ]
+]
+
+#ehMark[
+  {rows} = domAll("#ehPop .eh-item")
+  %(size(rows), i)[
+    {r} = get(rows, i)
+    r.dataset.on = "no"
+    @(eq(i, ehSel))[ r.dataset.on = "yes" ]
+  ]
+]
+
+// Puts the list just under the cursor, or above it when there is no room below.
+#ehPlace[
+  ehPop.hidden = false
+  {mk} = dom("#ehLayer .eh-c")
+  @(mk)[
+    {area} = ehPop.parentElement
+    {ar} = area.getBoundingClientRect()
+    {mr} = mk.getBoundingClientRect()
+    {lh} = number(css(ta, "lineHeight"))
+    @(not(lh))[ lh = 22 ]
+    {pw} = ehPop.offsetWidth
+    {ph} = ehPop.offsetHeight
+    {x} = sub(mr.left, ar.left)
+    {y} = add(add(sub(mr.top, ar.top), lh), 2)
+    @(gt(add(y, ph), ar.height))[ y = sub(sub(mr.top, ar.top), add(ph, 2)) ]
+    x = max(4, min(x, sub(sub(ar.width, pw), 4)))
+    y = max(0, y)
+    ehPop.style.left = join(x, "px")
+    ehPop.style.top = join(y, "px")
+  ]
+]
+
+#ehShow[
+  ehPop.innerHTML = ""
+  %(size(ehItems), i)[
+    {idx} = i
+    {it} = get(ehItems, idx)
+    {row} = ehAdd(ehPop, "div", "eh-item", "")
+    ehAdd(row, "span", "eh-name", it.name)
+    @(neq(it.sig, it.name))[ ehAdd(row, "span", "eh-sig", it.sig) ]
+    on(row, "pointerdown", #(e)[
+      e.preventDefault()
+      ehAccept(idx)
+    ])
+    on(row, "mousedown", #(e)[ e.preventDefault() ])
+  ]
+  ehMark()
+  ehPlace()
+]
+
+#ehSuggest[
+  ehPending = false
+  ehHide()
+  @(and(ehSet.suggest, ehPop, not(editor.hidden), eq(active(), ta), H))[
+    {v} = ta.value
+    {s} = ta.selectionStart
+    @(and(eq(s, ta.selectionEnd), not(ehIsName(ehCh(v, s)))))[
+      {a} = s
+      %(and(gt(a, 0), ehIsName(ehCh(v, sub(a, 1)))))[ a = sub(a, 1) ]
+      {prefix} = slice(v, a, s)
+      @(and(gte(size(prefix), 2), not(has(EH_DIGITS, ehCh(prefix, 0)))))[
+        {before} = ehCh(v, sub(a, 1))
+        @(and(eq(ehState(v, s), "code"), neq(before, "#"), neq(before, "{")))[
+          ehRefresh()
+          ehItems = ehFind(prefix, eq(before, "."))
+          @(size(ehItems))[
+            ehOpen = true
+            ehSel = 0
+            ehPicked = false
+            ehStart = a
+            ehAt = s
+            ehPopText = v
+            ehShow()
+          ]
+        ]
+      ]
+    ]
+  ]
+]
+
+#ehMove(dir)[
+  @(size(ehItems))[
+    ehSel = mod(add(add(ehSel, dir), size(ehItems)), size(ehItems))
+    ehPicked = true
+    ehMark()
+  ]
+]
+
+// Types the picked name over what you had typed so far.
+#ehAccept(i)[
+  @(lt(i, size(ehItems)))[
+    {it} = get(ehItems, i)
+    {a} = ehStart
+    {s} = ta.selectionStart
+    ehHide()
+    ta.setSelectionRange(a, s)
+    insert(it.text, it.caret)
+  ]
+]
+
+// Keys while the list is open: Tab takes the top one, the arrows move, Enter takes the one you moved to.
+#ehKey(e)[
+  @(and(ehOpen, not(e.isComposing), not(e.ctrlKey), not(e.metaKey), not(e.altKey)))[
+    {k} = e.key
+    @(eq(k, "ArrowDown"))[
+      e.preventDefault()
+      ehMove(1)
+    ]
+    @(eq(k, "ArrowUp"))[
+      e.preventDefault()
+      ehMove(-1)
+    ]
+    @(or(and(eq(k, "Tab"), not(e.shiftKey)), and(eq(k, "Enter"), ehPicked)))[
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      ehAccept(ehSel)
+    ]
+    @(eq(k, "Escape"))[ ehHide() ]
+  ]
+]
+
+// ---------- auto-close ----------
+
+// Closing partners only go in before blank space, the end of the text, or another closing bracket.
+#ehRoomAfter(c)[ or(eq(c, ""), has(" \t\n)]},;", c)) ]
+
+#ehTyped(e, c, v, s, en)[
+  {st} = ehState(v, s)
+  {nx} = ehCh(v, en)
+  @(neq(s, en))[
+    // Something is selected: wrap it, and keep it selected.
+    {close} = ehCloser(c)
+    @(and(close, eq(st, "code")))[
+      e.preventDefault()
+      insert(join(c, slice(v, s, en), close), add(sub(en, s), 2))
+      ta.setSelectionRange(add(s, 1), add(en, 1))
+    ]
+  ][
+    @(and(has(")]}", c), eq(nx, c), eq(st, "code")))[
+      e.preventDefault()
+      ta.setSelectionRange(add(s, 1), add(s, 1))
+    ]
+    @(and(eq(c, "\""), eq(nx, "\""), eq(st, "str")))[
+      e.preventDefault()
+      ta.setSelectionRange(add(s, 1), add(s, 1))
+    ]
+    @(and(has("([{", c), eq(st, "code"), ehRoomAfter(nx)))[
+      e.preventDefault()
+      insert(join(c, ehCloser(c)), 1)
+    ]
+    @(and(eq(c, "\""), eq(st, "code"), ehRoomAfter(nx), not(ehIsName(ehCh(v, sub(s, 1))))))[
+      e.preventDefault()
+      insert("\"\"", 1)
+    ]
+  ]
+]
+
+#ehBefore(e)[
+  @(and(ehSet.close, not(e.isComposing)))[
+    {v} = ta.value
+    {s} = ta.selectionStart
+    {en} = ta.selectionEnd
+    {type} = e.inputType
+    @(and(eq(type, "insertText"), eq(size(e.data), 1)))[ ehTyped(e, e.data, v, s, en) ]
+    @(and(eq(type, "deleteContentBackward"), eq(s, en), gt(s, 0)))[
+      {p} = ehCh(v, sub(s, 1))
+      {nx} = ehCh(v, s)
+      @(or(and(eq(p, "("), eq(nx, ")")), and(eq(p, "["), eq(nx, "]")), and(eq(p, "{"), eq(nx, "}")), and(eq(p, "\""), eq(nx, "\""))))[
+        e.preventDefault()
+        ta.setSelectionRange(sub(s, 1), add(s, 1))
+        exec("delete", false)
+      ]
+    ]
+  ]
+]
+
+// ---------- the File menu switches ----------
+
+#ehShowMenu[
+  %(keys(ehMenu), k)[
+    {b} = get(ehMenu, k)
+    {t} = "Off"
+    @(get(ehSet, k))[ t = "On" ]
+    b.lastElementChild.textContent = t
+  ]
+]
+
+#ehMenuItem(key, label, hint)[
+  {b} = make("button")
+  b.type = "button"
+  b.innerHTML = join(escape(label), "<small></small>")
+  put(ehMenu, key, b)
+  on(b, "click", #(e)[
+    put(ehSet, key, not(get(ehSet, key)))
+    ehSave()
+    ehShowMenu()
+    ehDirty = true
+    ehRefresh()
+    @(not(ehSet.suggest))[ ehHide() ]
+  ])
+  fileMenu.appendChild(b)
+  b
+]
+
+// ---------- building it ----------
+
+#ehCss[
+  {r} = list()
+  push(r, ".eh-layer{color:transparent !important}")
+  push(r, ".eh-layer mark{color:transparent;background:rgba(143,227,255,.3);background:color-mix(in srgb,var(--glow) 32%,transparent);box-shadow:0 0 0 1px rgba(143,227,255,.7);box-shadow:0 0 0 1px color-mix(in srgb,var(--glow) 75%,transparent);border-radius:2px}")
+  push(r, ".eh-layer mark.eh-bad{background:rgba(255,111,138,.42);box-shadow:0 0 0 1px rgba(255,111,138,.9)}")
+  push(r, ".eh-layer i.eh-c{display:inline;font-style:normal}")
+  push(r, ".eh-pop{position:absolute;z-index:6;min-width:170px;max-width:92%;max-height:230px;overflow:auto;padding:4px;background:var(--trench);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 26px rgba(0,0,0,.4);font:13px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}")
+  push(r, ".eh-item{display:flex;gap:12px;align-items:baseline;padding:5px 8px;border-radius:7px;cursor:pointer;white-space:nowrap}")
+  push(r, ".eh-item[data-on=yes]{background:var(--reef)}")
+  push(r, ".eh-name{font-weight:700;color:var(--foam)}")
+  push(r, ".eh-sig{color:var(--mist);font-size:12px;overflow:hidden;text-overflow:ellipsis}")
+  push(r, ".eh-sep{height:1px;background:var(--line);margin:6px 4px}")
+  push(r, ".eh-label{padding:2px 10px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--mist)}")
+  push(r, "@media (pointer:coarse){.eh-item{padding:10px 10px;font-size:14px}}")
+  joinList(r, "\n")
+]
+
+#ehTick[
+  later(150, #[
+    ehRefresh()
+    ehTick()
+  ])
+]
+
+#ehInstall[
+  @(not(dom("#ehLayer")))[
+    {d} = doc()
+    {st} = make("style")
+    st.textContent = ehCss()
+    d.head.appendChild(st)
+
+    // The layer sits just behind the highlighted code and has the same text, so marks line up.
+    ehLayer = make("pre")
+    ehLayer.id = "ehLayer"
+    ehLayer.className = "hl eh-layer"
+    ehLayer.setAttribute("aria-hidden", "true")
+    {area} = ta.parentElement
+    area.insertBefore(ehLayer, hl)
+
+    ehPop = make("div")
+    ehPop.id = "ehPop"
+    ehPop.className = "eh-pop"
+    ehPop.setAttribute("role", "listbox")
+    ehPop.hidden = true
+    area.appendChild(ehPop)
+
+    // The suggestions wait for a short pause in typing, so quick typing doesn't do the work on every key.
+    on(ta, "input", #(e)[
+      ehRefresh()
+      ehTimer = add(ehTimer, 1)
+      {mine} = ehTimer
+      ehPending = true
+      later(50, #[ @(eq(mine, ehTimer))[ ehSuggest() ] ])
+    ])
+    on(ta, "beforeinput", #(e)[ ehBefore(e) ])
+    on(ta, "keydown", #(e)[ ehKey(e) ])
+    on(ta, "keyup", #(e)[ ehRefresh() ])
+    on(ta, "pointerup", #(e)[ ehRefresh() ])
+    on(ta, "touchend", #(e)[ ehRefresh() ])
+    on(ta, "focus", #(e)[ ehRefresh() ])
+    on(ta, "blur", #(e)[ ehHide() ])
+    on(ta, "scroll", #(e)[ ehSyncScroll() ])
+    on(d, "selectionchange", #(e)[ @(eq(active(), ta))[ ehRefresh() ] ])
+
+    {sep} = make("div")
+    sep.className = "eh-sep"
+    fileMenu.appendChild(sep)
+    ehAdd(fileMenu, "div", "eh-label", "Editor helpers")
+    ehMenuItem("match", "Matching brackets", "")
+    ehMenuItem("close", "Auto-close brackets and quotes", "")
+    ehMenuItem("suggest", "Name suggestions", "")
+    ehShowMenu()
+
+    ehRefresh()
+    ehTick()
+  ]
+  true
+]
+
+{ehInstalled} = ehInstall()
