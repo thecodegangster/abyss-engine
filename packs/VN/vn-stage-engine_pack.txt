@@ -1,0 +1,295 @@
+//@ pack VN Stage (engine)
+//@ target engine
+// The stage for a visual novel: a background, characters who slide in and out, fades, screen shake,
+// flashes and a color tint. Backgrounds and characters are sprites from the Sprites pack.
+//
+//   stageBg(name)                      shows a background at once. name is a sprite, or a color like "#203050".
+//   stageSwapFade(frames, action)      fades to black, runs action, fades back. Use it to change scenes smoothly.
+//   stageShow(id, sprite, pos, flip)   a character steps in (or changes place). pos is "left", "center",
+//                                      "right", "farleft", "farright", or a number from 0 to 1 across the screen.
+//                                      flip true mirrors the sprite.
+//   stageLook(id, sprite)              changes a character's sprite (a new expression) without moving them.
+//   stageHide(id)                      the character slides out.     stageHideAll() clears everyone at once.
+//   stageSpeaker(id, talking)          the character bobs a little while talking is true.
+//   stageFade(dir, frames, color)      dir "out" fades to black (or "white"), "in" fades back.
+//   stageShake(frames, power)          shakes the picture.    stageFlash() a white flash.
+//   stageTint(css)                     a color laid over the background, like "rgba(40, 0, 80, 0.3)". "" removes it.
+//   stageBusy()                        true while a fade is running.
+//   stageUpdate()  stageDraw()  stageDrawFade()   call these every frame (the VN Script pack does).
+//   stageSnapshot()  stageRestore(s)   remember and bring back what is on stage.
+//   stageReset()                       clears the stage.
+//
+// Characters stand with their feet at the bottom of the screen, and are scaled by whole numbers
+// so the pixels stay sharp. Draw them as tall sprites in the Sprites tab.
+//
+// Dependencies: Sprites (engine). It uses drawSprite, hasSprite, spriteWidth and spriteHeight.
+// This pack only adds things. It does not replace any of Abyss Engine's own functions.
+
+{stBg} = ""
+{stBgColor} = "#000000"
+{stTint} = ""
+{stChars} = list()
+{stFadeA} = 0
+{stFadeGoal} = 0
+{stFadeSpeed} = 0
+{stFadeColor} = "0, 0, 0"
+{stFadeDone} = false
+{stShakeT} = 0
+{stShakePow} = 0
+{stFlashA} = 0
+{stTalkId} = ""
+{stTalking} = false
+
+#stageReset[
+  stBg = ""
+  stTint = ""
+  stChars = list()
+  stFadeA = 0
+  stFadeGoal = 0
+  stFadeDone = false
+  stShakeT = 0
+  stFlashA = 0
+  stTalking = false
+  true
+]
+
+// "left", "center", "right", "farleft", "farright", or a number from 0 to 1.
+#stagePos(p)[
+  {f} = 0.5
+  @(eq(p, "left"))[ f = 0.25 ]
+  @(eq(p, "right"))[ f = 0.75 ]
+  @(eq(p, "farleft"))[ f = 0.12 ]
+  @(eq(p, "farright"))[ f = 0.88 ]
+  @(and(eq(p, number(p)), gte(p, 0)))[ f = p ]
+  f
+]
+
+#stageFind(id)[
+  {found} = false
+  %(stChars, c)[ @(eq(c.id, id))[ found = c ] ]
+  found
+]
+
+// The biggest whole-number scale that keeps the sprite about as tall as the screen allows.
+#stageScaleFor(sprite)[
+  {sh} = spriteHeight(sprite)
+  {s} = 1
+  @(gt(sh, 0))[ s = max(1, floor(div(mul(screenHeight(), 0.86), sh))) ]
+  s
+]
+
+#stageBg(name)[
+  stBg = name
+  true
+]
+
+#stageTint(css)[
+  stTint = css
+  true
+]
+
+#stageShow(id, sprite, pos, flip)[
+  {c} = stageFind(id)
+  {tx} = round(mul(stagePos(pos), screenWidth()))
+  @(not(c))[
+    c = map()
+    c.id = id
+    c.leaving = false
+    c.x = add(tx, mul(screenWidth(), 0.4))
+    @(lt(tx, div(screenWidth(), 2)))[ c.x = sub(tx, mul(screenWidth(), 0.4)) ]
+    push(stChars, c)
+  ]
+  c.sprite = sprite
+  c.tx = tx
+  c.leaving = false
+  c.flip = false
+  @(flip)[ c.flip = true ]
+  c.scale = stageScaleFor(sprite)
+  c
+]
+
+#stageLook(id, sprite)[
+  {c} = stageFind(id)
+  @(c)[
+    c.sprite = sprite
+    c.scale = stageScaleFor(sprite)
+  ]
+  true
+]
+
+// The character slides off the side of the screen they are nearest to.
+#stageHide(id)[
+  {c} = stageFind(id)
+  @(c)[
+    {half} = add(div(mul(spriteWidth(c.sprite), c.scale), 2), 8)
+    c.leaving = true
+    @(gt(c.x, div(screenWidth(), 2)))[ c.tx = add(screenWidth(), half) ][ c.tx = sub(0, half) ]
+  ]
+  true
+]
+
+#stageHideAll[
+  stChars = list()
+  true
+]
+
+#stageSpeaker(id, talking)[
+  stTalkId = id
+  stTalking = talking
+  true
+]
+
+// ---------- fades ----------
+
+// Moves the fade toward goal (0 clear, 1 covered) over about this many frames, then runs done.
+#stageFadeTo(goal, frames, done)[
+  stFadeGoal = goal
+  @(eq(goal, stFadeA))[
+    @(done)[ done() ]
+  ][
+    stFadeSpeed = div(abs(sub(goal, stFadeA)), max(1, frames))
+    stFadeDone = done
+  ]
+  true
+]
+
+#stageFade(dir, frames, color)[
+  stFadeColor = "0, 0, 0"
+  @(eq(color, "white"))[ stFadeColor = "255, 255, 255" ]
+  @(eq(dir, "out"))[ stageFadeTo(1, frames, false) ][ stageFadeTo(0, frames, false) ]
+]
+
+// Fades out, runs action while the screen is covered, then fades back in.
+#stageSwapFade(frames, action)[
+  stFadeColor = "0, 0, 0"
+  {half} = max(1, round(div(frames, 2)))
+  stageFadeTo(1, half, #[
+    action()
+    stageFadeTo(0, half, false)
+  ])
+]
+
+#stageBusy[ neq(stFadeA, stFadeGoal) ]
+
+#stageShake(frames, power)[
+  stShakeT = frames
+  stShakePow = power
+  @(not(power))[ stShakePow = 4 ]
+  true
+]
+
+#stageFlash[
+  stFlashA = 1
+  true
+]
+
+// ---------- every frame ----------
+
+#stageUpdate[
+  %(stChars, c)[
+    {dx} = sub(c.tx, c.x)
+    @(lt(abs(dx), 0.6))[ c.x = c.tx ][ c.x = add(c.x, mul(dx, 0.2)) ]
+  ]
+  stChars = keep(stChars, #(c)[ not(and(c.leaving, eq(c.x, c.tx))) ])
+  @(gt(stShakeT, 0))[ stShakeT = sub(stShakeT, 1) ]
+  @(gt(stFlashA, 0))[ stFlashA = max(0, sub(stFlashA, 0.04)) ]
+  @(neq(stFadeA, stFadeGoal))[
+    {step} = stFadeSpeed
+    @(lte(abs(sub(stFadeGoal, stFadeA)), step))[
+      stFadeA = stFadeGoal
+      @(stFadeDone)[
+        {act} = stFadeDone
+        stFadeDone = false
+        act()
+      ]
+    ][
+      @(lt(stFadeA, stFadeGoal))[ stFadeA = add(stFadeA, step) ][ stFadeA = sub(stFadeA, step) ]
+    ]
+  ]
+]
+
+#stageBob[ floor(mul(abs(sin(mul(frameCount, 0.3))), 3)) ]
+
+#stageDrawBg(ox, oy)[
+  {w} = screenWidth()
+  {h} = screenHeight()
+  drawRect(0, 0, w, h, stBgColor)
+  @(size(stBg))[
+    @(eq(slice(stBg, 0, 1), "#"))[ drawRect(0, 0, w, h, stBg) ][
+      @(hasSprite(stBg))[
+        {sw} = spriteWidth(stBg)
+        {sh} = spriteHeight(stBg)
+        {s} = max(div(w, sw), div(h, sh))
+        {x} = floor(div(sub(w, mul(sw, s)), 2))
+        {y} = floor(div(sub(h, mul(sh, s)), 2))
+        drawSprite(stBg, add(x, ox), add(y, oy), s)
+      ]
+    ]
+  ]
+  @(size(stTint))[ drawRect(0, 0, w, h, stTint) ]
+]
+
+// The background and everyone on stage. Call it from #draw, then draw the text box over it.
+#stageDraw[
+  {ox} = 0
+  {oy} = 0
+  @(gt(stShakeT, 0))[
+    ox = round(mul(random(-100, 100), div(stShakePow, 100)))
+    oy = round(mul(random(-100, 100), div(stShakePow, 100)))
+  ]
+  stageDrawBg(ox, oy)
+  %(stChars, c)[
+    @(hasSprite(c.sprite))[
+      {px} = round(sub(c.x, div(mul(spriteWidth(c.sprite), c.scale), 2)))
+      {py} = sub(screenHeight(), mul(spriteHeight(c.sprite), c.scale))
+      @(and(stTalking, eq(c.id, stTalkId)))[ py = sub(py, stageBob()) ]
+      drawSprite(c.sprite, add(px, ox), add(py, oy), c.scale, c.flip)
+    ]
+  ]
+  @(gt(stFlashA, 0))[
+    drawRect(0, 0, screenWidth(), screenHeight(), join("rgba(255, 255, 255, ", round(stFlashA, 2), ")"))
+  ]
+]
+
+// The fade to black, drawn last so it covers the text box too.
+#stageDrawFade[
+  @(gt(stFadeA, 0))[
+    drawRect(0, 0, screenWidth(), screenHeight(), join("rgba(", stFadeColor, ", ", round(stFadeA, 3), ")"))
+  ]
+]
+
+// ---------- remembering the stage (for saving) ----------
+
+#stageSnapshot[
+  {s} = map()
+  s.bg = stBg
+  s.tint = stTint
+  s.chars = list()
+  %(stChars, c)[
+    {q} = map()
+    q.id = c.id
+    q.sprite = c.sprite
+    q.x = c.tx
+    q.flip = c.flip
+    push(s.chars, q)
+  ]
+  s
+]
+
+#stageRestore(s)[
+  stageReset()
+  stBg = s.bg
+  stTint = s.tint
+  %(s.chars, q)[
+    {c} = map()
+    c.id = q.id
+    c.sprite = q.sprite
+    c.x = q.x
+    c.tx = q.x
+    c.flip = q.flip
+    c.leaving = false
+    c.scale = stageScaleFor(q.sprite)
+    push(stChars, c)
+  ]
+  true
+]

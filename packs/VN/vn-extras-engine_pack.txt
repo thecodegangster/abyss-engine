@@ -1,0 +1,239 @@
+//@ pack VN Extras (engine)
+//@ target engine
+// The things players expect from a visual novel: a row of small buttons along the top
+// (Auto, Skip, Log, Save, Load), a backlog of what was said, auto-advance, skip, and one saved game.
+// It plugs into the VN Script pack through its hooks. Nothing else is needed: add the pack and the buttons appear.
+//
+//   exSaveKey       where the save lives in the browser. Change it to your game's name, like "mira:save".
+//   exButtons       false hides the button row (you can still call the functions below).
+//   exAutoWait      how many frames Auto waits after a line is fully shown (60 is one second).
+//   exSave()        save now.    exLoad()  load it.    exHasSave()  true if there is a save.
+//   exToggleAuto()  exToggleSkip()  exOpenLog()  exCloseLog()
+//   exToast(text)   a small message at the top of the screen.
+//
+// Tap the top half of the backlog to look further back, the bottom half to come forward, and the X to close it.
+// Any tap while Auto or Skip is on switches it off.
+//
+// Dependencies: VN Script (engine) (which needs VN Text Box (engine) and VN Stage (engine)).
+// This pack replaces vnHookTap, vnHookUpdate, vnHookDraw, which VN Script leaves empty on purpose.
+// Other packs that replace those hooks will clash with it.
+
+{exSaveKey} = "vn:save"
+{exButtons} = true
+{exAutoWait} = 70
+{exAuto} = false
+{exSkip} = false
+{exLogOpen} = false
+{exScroll} = 0
+{exTimer} = 0
+{exToastText} = ""
+{exToastT} = 0
+
+#exToast(msg)[
+  exToastText = msg
+  exToastT = 110
+  true
+]
+
+#exHasSave[ gt(size(storeGet(exSaveKey)), 0) ]
+
+#exSave[
+  @(vnActive())[
+    {ok} = storeSet(exSaveKey, jsonWrite(vnSnapshot()))
+    @(ok)[ exToast("Game saved") ][ exToast("Could not save") ]
+  ][ exToast("Nothing to save") ]
+  true
+]
+
+#exLoad[
+  {raw} = storeGet(exSaveKey)
+  {snap} = false
+  @(raw)[ snap = jsonRead(raw) ]
+  @(snap)[
+    vnRestore(snap)
+    exAuto = false
+    exSkip = false
+    exLogOpen = false
+    exToast("Game loaded")
+  ][ exToast("No saved game yet") ]
+  true
+]
+
+#exToggleAuto[
+  exAuto = not(exAuto)
+  exSkip = false
+  exTimer = 0
+  true
+]
+
+#exToggleSkip[
+  exSkip = not(exSkip)
+  exAuto = false
+  true
+]
+
+#exOpenLog[
+  exLogOpen = true
+  exAuto = false
+  exSkip = false
+  exScroll = 0
+  true
+]
+
+#exCloseLog[
+  exLogOpen = false
+  true
+]
+
+// The row of buttons: a list of maps with label, x, y, w, h and what to do.
+#exButtonRects[
+  {out} = list()
+  {fs} = max(8, sub(tbFontSize(), 3))
+  {h} = round(mul(fs, 1.9))
+  {names} = list("Auto", "Skip", "Log", "Save", "Load")
+  {n} = size(names)
+  {w} = min(round(mul(fs, 4.6)), floor(div(sub(screenWidth(), 8), n)))
+  {x0} = sub(screenWidth(), add(mul(w, n), 3))
+  %(n, i)[
+    {r} = map()
+    r.label = get(names, i)
+    r.x = add(x0, mul(i, w))
+    r.y = 3
+    r.w = sub(w, 2)
+    r.h = h
+    r.fs = fs
+    push(out, r)
+  ]
+  out
+]
+
+#exPress(label)[
+  @(eq(label, "Auto"))[ exToggleAuto() ]
+  @(eq(label, "Skip"))[ exToggleSkip() ]
+  @(eq(label, "Log"))[ exOpenLog() ]
+  @(eq(label, "Save"))[ exSave() ]
+  @(eq(label, "Load"))[ exLoad() ]
+]
+
+#exBarShown[ and(exButtons, or(eq(vnMode, "say"), eq(vnMode, "choice"), eq(vnMode, "wait"))) ]
+
+// Log layout: how many lines fit, and the X button.
+#exLogLines[
+  {L} = tbLayout()
+  {all} = list()
+  %(vnLog, e)[
+    {head} = e.msg
+    @(size(e.name))[ head = join(e.name, ": ", e.msg) ]
+    {lines} = tbWrap(head, sub(screenWidth(), mul(L.pad, 4)), L.fs)
+    %(size(lines), i)[
+      {ln} = map()
+      ln.text = get(lines, i)
+      ln.color = tbInk
+      @(and(eq(i, 0), e.color))[ ln.color = e.color ]
+      @(not(size(e.name)))[ ln.color = tbNarr ]
+      push(all, ln)
+    ]
+  ]
+  all
+]
+
+#exLogRows[
+  {L} = tbLayout()
+  max(3, floor(div(sub(screenHeight(), mul(L.lineH, 3)), L.lineH)))
+]
+
+// Taps. Give true when the tap was used here.
+#vnHookTap(x, y)[
+  {used} = false
+  @(exLogOpen)[
+    used = true
+    {L} = tbLayout()
+    @(lt(x, 0))[ exCloseLog() ][
+      @(and(gt(x, sub(screenWidth(), mul(L.lineH, 2))), lt(y, mul(L.lineH, 2))))[ exCloseLog() ][
+        @(lt(y, div(screenHeight(), 2)))[ exScroll = add(exScroll, sub(exLogRows(), 1)) ][ exScroll = sub(exScroll, sub(exLogRows(), 1)) ]
+      ]
+    ]
+  ][
+    @(exBarShown())[
+      %(exButtonRects(), r)[
+        @(and(not(used), tbHit(x, y, r.x, r.y, r.w, r.h)))[
+          used = true
+          exPress(r.label)
+        ]
+      ]
+    ]
+    @(and(not(used), or(exAuto, exSkip)))[
+      exAuto = false
+      exSkip = false
+      used = true
+    ]
+  ]
+  used
+]
+
+#vnHookUpdate[
+  @(exToastT)[ exToastT = sub(exToastT, 1) ]
+  @(exLogOpen)[ tbSpeedMul = 1 ]
+  @(not(exLogOpen))[
+    @(or(eq(vnMode, "end"), eq(vnMode, "idle")))[
+      exAuto = false
+      exSkip = false
+    ]
+    @(and(exSkip, eq(vnMode, "choice")))[ exSkip = false ]
+    @(exSkip)[ tbSpeedMul = 99 ][ tbSpeedMul = 1 ]
+    @(eq(vnMode, "say"))[
+      @(exSkip)[ @(tbDone())[ vnTap = true ] ]
+      @(exAuto)[
+        @(tbDone())[
+          exTimer = add(exTimer, 1)
+          @(gte(exTimer, exAutoWait))[
+            exTimer = 0
+            vnTap = true
+          ]
+        ][ exTimer = 0 ]
+      ]
+    ]
+  ]
+]
+
+#exDrawLog[
+  {L} = tbLayout()
+  {w} = screenWidth()
+  {h} = screenHeight()
+  drawRect(0, 0, w, h, "rgba(6, 8, 20, 0.97)")
+  drawText("Backlog", L.pad, 4, "#ffd88a", L.fs)
+  {all} = exLogLines()
+  {rows} = exLogRows()
+  {top} = max(0, sub(size(all), rows))
+  exScroll = clamp(exScroll, 0, top)
+  {from} = sub(sub(size(all), rows), exScroll)
+  @(lt(from, 0))[ from = 0 ]
+  %(rows, i)[
+    {k} = add(from, i)
+    @(lt(k, size(all)))[
+      {ln} = get(all, k)
+      drawText(ln.text, L.pad, add(mul(L.lineH, 2), mul(i, L.lineH)), ln.color, L.fs)
+    ]
+  ]
+  {xs} = round(mul(L.lineH, 1.6))
+  tbButton(sub(w, add(xs, 4)), 3, xs, xs, "X", false, L.fs)
+  @(not(size(all)))[ drawCenteredText("Nothing yet.", div(w, 2), div(h, 2), tbNarr, L.fs) ]
+]
+
+#vnHookDraw[
+  @(exBarShown())[
+    %(exButtonRects(), r)[
+      {on} = false
+      @(and(eq(r.label, "Auto"), exAuto))[ on = true ]
+      @(and(eq(r.label, "Skip"), exSkip))[ on = true ]
+      tbButton(r.x, r.y, r.w, r.h, r.label, on, r.fs)
+    ]
+  ]
+  @(exLogOpen)[ exDrawLog() ]
+  @(exToastT)[
+    {L} = tbLayout()
+    {tw} = add(textWidth(exToastText, L.fs), mul(L.pad, 2))
+    tbFrame(floor(div(sub(screenWidth(), tw), 2)), round(mul(screenHeight(), 0.4)), tw, add(L.lineH, 4), tbPanel, tbEdge)
+    drawCenteredText(exToastText, div(screenWidth(), 2), add(round(mul(screenHeight(), 0.4)), add(div(L.lineH, 2), 2)), tbInk, L.fs)
+  ]
+]

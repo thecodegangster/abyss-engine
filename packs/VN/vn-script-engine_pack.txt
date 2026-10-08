@@ -1,0 +1,674 @@
+//@ pack VN Script (engine)
+//@ target engine
+// Write a visual novel as a list of story commands, and play it. Hash can't pause in the middle of a function,
+// so a story is recorded first, as steps, and then played one step at a time. That is what lets it wait for
+// taps, choices and fades, and lets it be saved and loaded.
+//
+// Write the story in a function, and play it from your game:
+//
+//   #story[
+//     character("mira", "Mira", "#ff9ec4")
+//     label("start")
+//     bg("park")
+//     show("mira", "mira_smile", "right")
+//     say("mira", "You came!")
+//     choice("What do you say?", list("Hi!", "hi"), list("...", "quiet"))
+//     label("hi")
+//     say("mira", "Yay!")
+//     theEnd()
+//   ]
+//   #init[ screen(320, 240) gamepad(false) vnPlay(story, "start", false) ]
+//   #update[ vnUpdate() ]
+//   #draw[ vnDraw() ]
+//
+// Story commands (they only record a step, so they can be used anywhere inside #story):
+//   character(id, name, color)       who "id" is, as shown in the nameplate, and its color
+//   label(name)                      a place the story can jump to
+//   say(who, text)                   a line of dialogue. who is a character id, or any name. Use \n for a new line.
+//   tell(text)                       narration, with no nameplate
+//   choice(prompt, a, b, c, d)       up to 4 options, each list("text shown", "label to jump to")
+//   jump(label)                      go to a label
+//   bg(name)  bgFade(name)           change the background at once, or with a fade
+//   show(id, sprite, pos, flip)      a character steps in. pos: left center right farleft farright, or 0 to 1
+//   look(id, sprite)                 change their sprite (an expression)        hide(id)  hideAll()
+//   fadeOut(frames, color)  fadeIn(frames)   fade to black (or "white") and back
+//   wait(frames)   shake(frames, power)   flash()   tint(css)
+//   card(text, frames)               a title card on black
+//   playSong(notes, bpm, wave)  stopSong()  playSfx(name)
+//   setVar(name, value)  addVar(name, n)           remember things
+//   jumpIf(name, label)  jumpIfNot(name, label)  jumpIfAtLeast(name, n, label)  jumpIfIs(name, value, label)
+//   call(label)  back()              run a label like a small function and come back
+//   theEnd()                         finish the story
+//
+// For your game code:
+//   vnPlay(story, startLabel, onEnd) records the story and starts it. onEnd runs when it finishes (or false).
+//   vnUpdate()  vnDraw()             call them from #update and #draw
+//   vnVar(name)                      what the story remembered (false if nothing)
+//   vnMode                           "idle" "run" "say" "choice" "wait" "busy" "card" or "end"
+//   vnActive()  vnEnded()            is a story running? has it finished?
+//   vnSnapshot()  vnRestore(s)       remember and bring back the whole story state (the Extras pack saves with these)
+//
+// Tapping the screen (or A, Space, Enter) goes on. The pad is not needed: call gamepad(false) in #init.
+// Other packs hook in by replacing the four vnHook functions at the bottom of this pack.
+//
+// Dependencies: VN Text Box (engine), VN Stage (engine).
+// This pack only adds things. It does not replace any of Abyss Engine's own functions.
+
+{vnSteps} = list()
+{vnLabels} = map()
+{vnCast} = map()
+{vnVars} = map()
+{vnPc} = 0
+{vnMode} = "idle"
+{vnWaitT} = 0
+{vnStack} = list()
+{vnPick} = false
+{vnSel} = 0
+{vnLog} = list()
+{vnTouchWas} = false
+{vnTap} = false
+{vnTapX} = 0
+{vnTapY} = 0
+{vnSong} = false
+{vnOnEnd} = false
+{vnSpeaker} = ""
+{vnCardText} = ""
+{vnCardT} = 0
+{vnCardLen} = 0
+
+// ---------- writing a story ----------
+
+#vnAdd(kind)[
+  {s} = map()
+  s.k = kind
+  push(vnSteps, s)
+  s
+]
+
+#label(name)[
+  put(vnLabels, name, size(vnSteps))
+  true
+]
+
+#character(id, name, color)[
+  {c} = map()
+  c.name = name
+  c.color = color
+  put(vnCast, id, c)
+  true
+]
+
+#say(who, msg)[
+  {s} = vnAdd("say")
+  s.who = who
+  s.msg = msg
+  s
+]
+
+#tell(msg)[ say("", msg) ]
+
+#choice(prompt, a, b, c, d)[
+  {s} = vnAdd("choice")
+  s.prompt = prompt
+  s.opts = list()
+  @(a)[ push(s.opts, a) ]
+  @(b)[ push(s.opts, b) ]
+  @(c)[ push(s.opts, c) ]
+  @(d)[ push(s.opts, d) ]
+  s
+]
+
+#jump(lbl)[
+  {s} = vnAdd("jump")
+  s.lbl = lbl
+  s
+]
+
+#bg(name)[
+  {s} = vnAdd("bg")
+  s.name = name
+  s.fade = false
+  s
+]
+
+#bgFade(name)[
+  {s} = bg(name)
+  s.fade = true
+  s
+]
+
+#show(id, sprite, pos, flip)[
+  {s} = vnAdd("show")
+  s.id = id
+  s.sprite = sprite
+  s.pos = pos
+  s.flip = flip
+  s
+]
+
+#look(id, sprite)[
+  {s} = vnAdd("look")
+  s.id = id
+  s.sprite = sprite
+  s
+]
+
+#hide(id)[
+  {s} = vnAdd("hide")
+  s.id = id
+  s
+]
+
+#hideAll[ vnAdd("hideAll") ]
+
+#fadeOut(frames, color)[
+  {s} = vnAdd("fade")
+  s.dir = "out"
+  s.frames = frames
+  s.color = color
+  @(not(frames))[ s.frames = 30 ]
+  s
+]
+
+#fadeIn(frames)[
+  {s} = vnAdd("fade")
+  s.dir = "in"
+  s.frames = frames
+  s.color = false
+  @(not(frames))[ s.frames = 30 ]
+  s
+]
+
+#wait(frames)[
+  {s} = vnAdd("wait")
+  s.frames = frames
+  s
+]
+
+#shake(frames, power)[
+  {s} = vnAdd("shake")
+  s.frames = frames
+  s.power = power
+  @(not(frames))[ s.frames = 24 ]
+  s
+]
+
+#flash[ vnAdd("flash") ]
+
+#tint(css)[
+  {s} = vnAdd("tint")
+  s.css = css
+  @(not(css))[ s.css = "" ]
+  s
+]
+
+#card(msg, frames)[
+  {s} = vnAdd("card")
+  s.msg = msg
+  s.frames = frames
+  @(not(frames))[ s.frames = 150 ]
+  s
+]
+
+#playSong(notes, bpm, wave)[
+  {s} = vnAdd("song")
+  s.notes = notes
+  s.bpm = bpm
+  s.wave = wave
+  s
+]
+
+#stopSong[ vnAdd("stopSong") ]
+
+#playSfx(name)[
+  {s} = vnAdd("sfx")
+  s.name = name
+  s
+]
+
+#setVar(name, value)[
+  {s} = vnAdd("set")
+  s.name = name
+  s.value = value
+  s
+]
+
+#addVar(name, n)[
+  {s} = vnAdd("add")
+  s.name = name
+  s.n = n
+  s
+]
+
+#jumpIf(name, lbl)[
+  {s} = vnAdd("jumpIf")
+  s.name = name
+  s.lbl = lbl
+  s
+]
+
+#jumpIfNot(name, lbl)[
+  {s} = vnAdd("jumpIfNot")
+  s.name = name
+  s.lbl = lbl
+  s
+]
+
+#jumpIfAtLeast(name, n, lbl)[
+  {s} = vnAdd("jumpIfAtLeast")
+  s.name = name
+  s.n = n
+  s.lbl = lbl
+  s
+]
+
+#jumpIfIs(name, value, lbl)[
+  {s} = vnAdd("jumpIfIs")
+  s.name = name
+  s.value = value
+  s.lbl = lbl
+  s
+]
+
+#call(lbl)[
+  {s} = vnAdd("call")
+  s.lbl = lbl
+  s
+]
+
+#back[ vnAdd("back") ]
+
+#theEnd[ vnAdd("end") ]
+
+// ---------- remembered things ----------
+
+#vnVar(name)[
+  @(has(vnVars, name))[ get(vnVars, name) ][ false ]
+]
+
+#vnNum(name)[
+  {v} = vnVar(name)
+  @(not(v))[ v = 0 ]
+  v
+]
+
+// ---------- playing ----------
+
+#vnLogEntry(name, color, msg)[
+  {e} = map()
+  e.name = name
+  e.color = color
+  e.msg = msg
+  e
+]
+
+#vnPlay(story, startLabel, onEnd)[
+  vnSteps = list()
+  vnLabels = map()
+  vnCast = map()
+  story()
+  vnOnEnd = onEnd
+  @(not(startLabel))[ startLabel = "start" ]
+  vnStart(startLabel)
+]
+
+// Starts the recorded story again from a label, with a clean slate.
+#vnStart(lbl)[
+  vnVars = map()
+  vnStack = list()
+  vnLog = list()
+  vnSong = false
+  vnPick = false
+  stageReset()
+  tbHide()
+  tbSpeedMul = 1
+  vnTouchWas = touching()
+  vnTap = false
+  vnPc = 0
+  @(has(vnLabels, lbl))[ vnPc = get(vnLabels, lbl) ]
+  vnMode = "run"
+  true
+]
+
+#vnActive[ has(list("run", "say", "choice", "wait", "busy", "card"), vnMode) ]
+
+#vnEnded[ eq(vnMode, "end") ]
+
+#vnGoto(lbl)[
+  @(has(vnLabels, lbl))[ vnPc = get(vnLabels, lbl) ][
+    print(join("The story jumps to \"", lbl, "\", but there is no label(\"", lbl, "\") in it."))
+    vnPc = size(vnSteps)
+  ]
+]
+
+#vnFinish[
+  vnMode = "end"
+  tbHide()
+  stageSpeaker("", false)
+  @(vnOnEnd)[
+    {f} = vnOnEnd
+    vnOnEnd = false
+    f()
+  ]
+]
+
+#vnDoSay(s)[
+  {nm} = s.who
+  {col} = false
+  @(has(vnCast, s.who))[
+    {c} = get(vnCast, s.who)
+    nm = c.name
+    col = c.color
+  ]
+  tbSay(nm, col, s.msg)
+  vnSpeaker = s.who
+  push(vnLog, vnLogEntry(nm, col, s.msg))
+  @(gt(size(vnLog), 80))[ removeAt(vnLog, 0) ]
+  vnHookSay(nm, s.msg)
+  vnMode = "say"
+]
+
+// Runs one step. Steps that need to wait change vnMode, which stops the run for now.
+#vnExec(s)[
+  {k} = s.k
+  @(eq(k, "say"))[ vnDoSay(s) ]
+  @(eq(k, "choice"))[
+    vnPick = s
+    vnSel = 0
+    tbHide()
+    stageSpeaker("", false)
+    vnMode = "choice"
+  ]
+  @(eq(k, "jump"))[ vnGoto(s.lbl) ]
+  @(eq(k, "bg"))[
+    @(s.fade)[
+      vnMode = "busy"
+      stageSwapFade(40, #[ stageBg(s.name) ])
+    ][ stageBg(s.name) ]
+  ]
+  @(eq(k, "show"))[ stageShow(s.id, s.sprite, s.pos, s.flip) ]
+  @(eq(k, "look"))[ stageLook(s.id, s.sprite) ]
+  @(eq(k, "hide"))[ stageHide(s.id) ]
+  @(eq(k, "hideAll"))[ stageHideAll() ]
+  @(eq(k, "fade"))[
+    stageFade(s.dir, s.frames, s.color)
+    vnMode = "busy"
+  ]
+  @(eq(k, "wait"))[
+    vnWaitT = s.frames
+    vnMode = "wait"
+  ]
+  @(eq(k, "shake"))[ stageShake(s.frames, s.power) ]
+  @(eq(k, "flash"))[ stageFlash() ]
+  @(eq(k, "tint"))[ stageTint(s.css) ]
+  @(eq(k, "card"))[
+    tbHide()
+    vnCardText = s.msg
+    vnCardLen = s.frames
+    vnCardT = s.frames
+    vnMode = "card"
+  ]
+  @(eq(k, "song"))[
+    vnSong = list(s.notes, s.bpm, s.wave)
+    music(s.notes, s.bpm, s.wave)
+  ]
+  @(eq(k, "stopSong"))[
+    vnSong = false
+    stopMusic()
+  ]
+  @(eq(k, "sfx"))[ sfx(s.name) ]
+  @(eq(k, "set"))[ put(vnVars, s.name, s.value) ]
+  @(eq(k, "add"))[ put(vnVars, s.name, add(vnNum(s.name), s.n)) ]
+  @(eq(k, "jumpIf"))[ @(vnVar(s.name))[ vnGoto(s.lbl) ] ]
+  @(eq(k, "jumpIfNot"))[ @(not(vnVar(s.name)))[ vnGoto(s.lbl) ] ]
+  @(eq(k, "jumpIfAtLeast"))[ @(gte(vnNum(s.name), s.n))[ vnGoto(s.lbl) ] ]
+  @(eq(k, "jumpIfIs"))[ @(eq(vnVar(s.name), s.value))[ vnGoto(s.lbl) ] ]
+  @(eq(k, "call"))[
+    push(vnStack, vnPc)
+    vnGoto(s.lbl)
+  ]
+  @(eq(k, "back"))[
+    @(size(vnStack))[ vnPc = pop(vnStack) ][ vnFinish() ]
+  ]
+  @(eq(k, "end"))[ vnFinish() ]
+]
+
+// Runs steps until one has to wait.
+#vnRun[
+  {guard} = 0
+  %(and(eq(vnMode, "run"), lt(guard, 400)))[
+    guard = add(guard, 1)
+    @(gte(vnPc, size(vnSteps)))[ vnFinish() ][
+      {s} = get(vnSteps, vnPc)
+      vnPc = add(vnPc, 1)
+      vnExec(s)
+    ]
+  ]
+]
+
+// Was the screen just tapped, or A, Space or Enter just pressed? Gives vnTap, vnTapX and vnTapY.
+#vnReadTap[
+  {down} = touching()
+  vnTap = false
+  @(and(down, not(vnTouchWas)))[
+    vnTap = true
+    vnTapX = touchX()
+    vnTapY = touchY()
+  ]
+  @(or(keyPressed("a"), keyPressed("start")))[
+    vnTap = true
+    vnTapX = -1
+    vnTapY = -1
+  ]
+  vnTouchWas = down
+  @(vnTap)[ @(vnHookTap(vnTapX, vnTapY))[ vnTap = false ] ]
+]
+
+#vnSayStep[
+  stageSpeaker(vnSpeaker, not(tbDone()))
+  @(vnTap)[
+    vnTap = false
+    @(tbAdvance())[
+      stageSpeaker("", false)
+      vnMode = "run"
+      vnRun()
+    ]
+  ]
+]
+
+// ---------- choices ----------
+
+#vnChoiceRects[
+  {out} = list()
+  @(vnPick)[
+    {opts} = vnPick.opts
+    {L} = tbLayout()
+    {bw} = round(mul(screenWidth(), 0.84))
+    {bh} = round(mul(L.fs, 2.4))
+    {gap} = round(mul(L.fs, 0.7))
+    {total} = add(mul(size(opts), bh), mul(max(0, sub(size(opts), 1)), gap))
+    {top} = round(sub(mul(screenHeight(), 0.48), div(total, 2)))
+    %(size(opts), i)[
+      {r} = map()
+      r.x = floor(div(sub(screenWidth(), bw), 2))
+      r.y = add(top, mul(i, add(bh, gap)))
+      r.w = bw
+      r.h = bh
+      push(out, r)
+    ]
+  ]
+  out
+]
+
+#vnChoose(i)[
+  {o} = get(vnPick.opts, i)
+  vnPick = false
+  push(vnLog, vnLogEntry("", false, join("> ", get(o, 0))))
+  vnMode = "run"
+  vnGoto(get(o, 1))
+  vnRun()
+]
+
+#vnChoiceUpdate[
+  @(vnPick)[
+    {n} = size(vnPick.opts)
+    @(gt(n, 0))[
+      @(keyPressed("up"))[ vnSel = mod(add(vnSel, sub(n, 1)), n) ]
+      @(keyPressed("down"))[ vnSel = mod(add(vnSel, 1), n) ]
+      @(vnTap)[
+        vnTap = false
+        @(lt(vnTapX, 0))[ vnChoose(vnSel) ][
+          {rects} = vnChoiceRects()
+          %(size(rects), i)[
+            {r} = get(rects, i)
+            @(and(eq(vnMode, "choice"), tbHit(vnTapX, vnTapY, r.x, r.y, r.w, r.h)))[ vnChoose(i) ]
+          ]
+        ]
+      ]
+    ]
+  ]
+]
+
+#vnDrawChoice[
+  @(vnPick)[
+    {L} = tbLayout()
+    {rects} = vnChoiceRects()
+    {opts} = vnPick.opts
+    drawRect(0, 0, screenWidth(), screenHeight(), "rgba(0, 0, 0, 0.45)")
+    @(size(rects))[
+      {first} = get(rects, 0)
+      {lines} = tbWrap(vnPick.prompt, mul(screenWidth(), 0.86), L.fs)
+      {top} = sub(first.y, add(mul(size(lines), L.lineH), L.pad))
+      %(size(lines), i)[
+        drawCenteredText(get(lines, i), div(screenWidth(), 2), add(top, add(mul(i, L.lineH), div(L.lineH, 2))), tbInk, L.fs)
+      ]
+      %(size(rects), i)[
+        {r} = get(rects, i)
+        tbButton(r.x, r.y, r.w, r.h, get(get(opts, i), 0), eq(i, vnSel), L.fs)
+      ]
+    ]
+  ]
+]
+
+// ---------- title cards ----------
+
+#vnDrawCard[
+  {w} = screenWidth()
+  {h} = screenHeight()
+  {elapsed} = sub(vnCardLen, vnCardT)
+  {a} = min(1, div(elapsed, 24), div(vnCardT, 24))
+  @(lt(a, 0))[ a = 0 ]
+  {fs} = round(mul(tbFontSize(), 1.7))
+  {lines} = tbWrap(vnCardText, mul(w, 0.8), fs)
+  {lh} = round(mul(fs, 1.5))
+  {top} = round(sub(div(h, 2), div(mul(size(lines), lh), 2)))
+  drawRect(0, 0, w, h, "#000000")
+  %(size(lines), i)[
+    drawCenteredText(get(lines, i), div(w, 2), add(top, add(mul(i, lh), div(lh, 2))), join("rgba(244, 241, 255, ", round(a, 2), ")"), fs)
+  ]
+]
+
+// ---------- every frame ----------
+
+// Call from #update.
+#vnUpdate[
+  vnReadTap()
+  stageUpdate()
+  tbStep()
+  vnHookUpdate()
+  @(eq(vnMode, "run"))[ vnRun() ]
+  @(eq(vnMode, "say"))[ vnSayStep() ]
+  @(eq(vnMode, "choice"))[ vnChoiceUpdate() ]
+  @(eq(vnMode, "wait"))[
+    vnWaitT = sub(vnWaitT, 1)
+    @(or(lte(vnWaitT, 0), vnTap))[
+      vnTap = false
+      vnMode = "run"
+      vnRun()
+    ]
+  ]
+  @(eq(vnMode, "busy"))[
+    @(not(stageBusy()))[
+      vnMode = "run"
+      vnRun()
+    ]
+  ]
+  @(eq(vnMode, "card"))[
+    vnCardT = sub(vnCardT, 1)
+    @(or(lte(vnCardT, 0), and(vnTap, gt(sub(vnCardLen, vnCardT), 20))))[
+      vnTap = false
+      vnMode = "run"
+      vnRun()
+    ]
+  ]
+]
+
+// Call from #draw.
+#vnDraw[
+  clear("#000000")
+  stageDraw()
+  tbDraw()
+  @(eq(vnMode, "choice"))[ vnDrawChoice() ]
+  stageDrawFade()
+  @(eq(vnMode, "card"))[ vnDrawCard() ]
+  vnHookDraw()
+]
+
+// ---------- saving the whole state ----------
+
+#vnCopyList(l)[ keep(l, #(v)[ true ]) ]
+
+#vnSnapshot[
+  {s} = map()
+  {lost} = false
+  s.pc = vnPc
+  @(or(eq(vnMode, "say"), eq(vnMode, "choice")))[
+    s.pc = sub(vnPc, 1)
+    lost = true
+  ]
+  s.vars = map()
+  %(keys(vnVars), name)[ put(s.vars, name, get(vnVars, name)) ]
+  s.stack = vnCopyList(vnStack)
+  s.stage = stageSnapshot()
+  s.song = vnSong
+  s.log = vnCopyList(vnLog)
+  @(and(lost, eq(vnMode, "say"), size(s.log)))[ pop(s.log) ]
+  s
+]
+
+#vnRestore(s)[
+  vnVars = map()
+  %(keys(s.vars), name)[ put(vnVars, name, get(s.vars, name)) ]
+  vnStack = vnCopyList(s.stack)
+  vnLog = vnCopyList(s.log)
+  stageRestore(s.stage)
+  tbHide()
+  tbSpeedMul = 1
+  vnPick = false
+  stopMusic()
+  vnSong = false
+  @(s.song)[
+    vnSong = s.song
+    music(get(s.song, 0), get(s.song, 1), get(s.song, 2))
+  ]
+  vnPc = s.pc
+  vnTouchWas = touching()
+  vnTap = false
+  vnMode = "run"
+  true
+]
+
+// ---------- places for other packs to plug in ----------
+// These do nothing here. The VN Extras pack replaces them, and so can yours.
+
+// Called when the screen is tapped. Give true if you used the tap, so the story doesn't go on.
+#vnHookTap(x, y)[ false ]
+
+// Called every frame, before the story runs.
+#vnHookUpdate[ true ]
+
+// Called every frame, after everything else is drawn.
+#vnHookDraw[ true ]
+
+// Called when a new line of dialogue starts.
+#vnHookSay(who, msg)[ true ]

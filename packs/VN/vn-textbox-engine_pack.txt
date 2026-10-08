@@ -1,0 +1,244 @@
+//@ pack VN Text Box (engine)
+//@ target engine
+// A visual novel dialogue box: word wrap, typewriter text, a nameplate, pages and a little voice blip.
+// It sizes itself from the game screen, so it works at any screen size and on phones.
+//
+//   tbSay(name, color, text)     starts showing a line. name "" is narration (no nameplate).
+//                                color is the nameplate color, or false for the default.
+//   tbStep()                     call once per frame from #update: reveals the text.
+//   tbDraw()                     call from #draw: draws the box.
+//   tbAdvance()                  the player tapped: finishes the line, or turns the page.
+//                                Gives true when the whole line has been read.
+//   tbDone()                     true when the current page is fully shown.
+//   tbHide()                     hides the box.     tbVisible is true while it is showing.
+//   tbWrap(text, width, size)    splits text into a list of lines that fit width.
+//   tbLayout()                   the box's size and place: x, y, w, h, pad, lineH, rows, textW, fs.
+//   tbButton(x, y, w, h, label, on, size)   a button in the same style. on highlights it.
+//   tbHit(px, py, x, y, w, h)    true if the point px, py is inside the rectangle.
+//
+// Settings (plain variables, change them from #init):
+//   tbSpeed      letters per frame (0.6). Bigger is faster.
+//   tbBlipOn     false turns off the typing sound.
+//   tbSizeSet    text size in pixels. 0 picks one that fits the screen.
+//   tbStyle(panel, edge, ink)    set the box colors. Colors are CSS text.
+//
+// Dependencies: none.
+// This pack only adds things. It does not replace any of Abyss Engine's own functions.
+
+{tbWho} = ""
+{tbWhoColor} = "#ffd88a"
+{tbPages} = list(list(""))
+{tbPage} = 0
+{tbShown} = 0
+{tbVisible} = false
+{tbSpeed} = 0.6
+{tbSpeedMul} = 1
+{tbBlipOn} = true
+{tbPitch} = 220
+{tbTick} = 0
+{tbSizeSet} = 0
+{tbPanel} = "rgba(12, 14, 32, 0.86)"
+{tbEdge} = "#6c78b8"
+{tbInk} = "#f4f1ff"
+{tbNarr} = "#cfcbe8"
+{tbLetters} = "abcdefghijklmnopqrstuvwxyz"
+
+#tbStyle(panel, edge, ink)[
+  tbPanel = panel
+  tbEdge = edge
+  tbInk = ink
+  true
+]
+
+// The text size: what you set, or one that fits the screen.
+#tbFontSize[
+  {s} = tbSizeSet
+  @(not(s))[ s = floor(clamp(div(screenWidth(), 29), 9, 26)) ]
+  s
+]
+
+// Where the box goes and how big it is. Everything else works from this.
+#tbLayout[
+  {w} = screenWidth()
+  {h} = screenHeight()
+  {fs} = tbFontSize()
+  {m} = max(4, round(mul(w, 0.02)))
+  {pad} = max(6, round(mul(fs, 0.8)))
+  {lineH} = round(mul(fs, 1.4))
+  {rows} = 3
+  @(gte(h, 220))[ rows = 4 ]
+  {bh} = add(mul(rows, lineH), mul(pad, 2))
+  {box} = map()
+  box.fs = fs
+  box.x = m
+  box.w = sub(w, mul(m, 2))
+  box.h = bh
+  box.y = sub(h, add(bh, m))
+  box.pad = pad
+  box.lineH = lineH
+  box.rows = rows
+  box.textW = sub(sub(w, mul(m, 2)), mul(pad, 2))
+  box
+]
+
+// Splits text into lines that fit in maxW pixels. A \n in the text starts a new line.
+#tbWrap(str, maxW, fs)[
+  {out} = list()
+  %(split(str, "\n"), para)[
+    {line} = ""
+    %(split(para, " "), wd)[
+      @(size(wd))[
+        {attempt} = wd
+        @(size(line))[ attempt = join(line, " ", wd) ]
+        @(and(size(line), gt(textWidth(attempt, fs), maxW)))[
+          push(out, line)
+          line = wd
+        ][ line = attempt ]
+      ]
+    ]
+    push(out, line)
+  ]
+  out
+]
+
+// Groups lines into pages of rows lines each.
+#tbPaginate(lines, rows)[
+  {pages} = list()
+  {cur} = list()
+  %(lines, ln)[
+    push(cur, ln)
+    @(gte(size(cur), rows))[
+      push(pages, cur)
+      cur = list()
+    ]
+  ]
+  @(size(cur))[ push(pages, cur) ]
+  @(not(size(pages)))[ push(pages, list("")) ]
+  pages
+]
+
+// Each speaker gets their own voice pitch, made from the first and last letters of their name.
+#tbVoice(who)[
+  {p} = 150
+  @(size(who))[
+    {a} = find(tbLetters, lower(slice(who, 0, 1)))
+    {b} = find(tbLetters, lower(slice(who, sub(size(who), 1), size(who))))
+    @(lt(a, 0))[ a = 3 ]
+    @(lt(b, 0))[ b = 5 ]
+    p = add(190, mul(a, 9), mul(b, 3))
+  ]
+  p
+]
+
+// Starts showing a line of dialogue. who "" is narration.
+#tbSay(who, color, msg)[
+  {L} = tbLayout()
+  @(not(color))[ color = "#ffd88a" ]
+  tbWho = who
+  tbWhoColor = color
+  tbPages = tbPaginate(tbWrap(join(msg), L.textW, L.fs), L.rows)
+  tbPage = 0
+  tbShown = 0
+  tbVisible = true
+  tbPitch = tbVoice(who)
+  true
+]
+
+#tbHide[
+  tbVisible = false
+  true
+]
+
+// How many letters the current page has.
+#tbPageSize[
+  {n} = 0
+  %(get(tbPages, tbPage), ln)[ n = add(n, size(ln)) ]
+  n
+]
+
+#tbDone[ gte(tbShown, tbPageSize()) ]
+
+#tbBlip[ tones(list(list("square", tbPitch, tbPitch, 0.035, 0.07, 0)), 0) ]
+
+// Call once per frame from #update.
+#tbStep[
+  tbTick = add(tbTick, 1)
+  @(and(tbVisible, not(tbDone())))[
+    {before} = floor(tbShown)
+    tbShown = add(tbShown, mul(tbSpeed, tbSpeedMul))
+    {total} = tbPageSize()
+    @(gt(tbShown, total))[ tbShown = total ]
+    @(and(tbBlipOn, lt(tbSpeedMul, 3), gt(floor(tbShown), before), eq(mod(floor(tbShown), 2), 0)))[
+      @(size(tbWho))[ tbBlip() ]
+    ]
+  ]
+]
+
+// The player tapped. Shows the rest of the page, or turns the page.
+// Gives true once the whole line has been read.
+#tbAdvance[
+  {finished} = false
+  @(not(tbDone()))[ tbShown = tbPageSize() ][
+    @(lt(add(tbPage, 1), size(tbPages)))[
+      tbPage = add(tbPage, 1)
+      tbShown = 0
+    ][ finished = true ]
+  ]
+  finished
+]
+
+#tbHit(px, py, x, y, w, h)[ and(gte(px, x), lt(px, add(x, w)), gte(py, y), lt(py, add(y, h))) ]
+
+// A box with an outline.
+#tbFrame(x, y, w, h, fill, edge)[
+  drawRect(x, y, w, h, fill)
+  drawRect(x, y, w, 1, edge)
+  drawRect(x, add(y, sub(h, 1)), w, 1, edge)
+  drawRect(x, y, 1, h, edge)
+  drawRect(add(x, sub(w, 1)), y, 1, h, edge)
+]
+
+#tbButton(x, y, w, h, label, on, fs)[
+  {fill} = tbPanel
+  {edge} = tbEdge
+  @(on)[
+    fill = "#4a4fa8"
+    edge = "#d4d7ff"
+  ]
+  tbFrame(x, y, w, h, fill, edge)
+  drawCenteredText(label, add(x, div(w, 2)), add(y, div(h, 2)), tbInk, fs)
+]
+
+// Call from #draw.
+#tbDraw[
+  @(tbVisible)[
+    {L} = tbLayout()
+    tbFrame(L.x, L.y, L.w, L.h, tbPanel, tbEdge)
+    @(size(tbWho))[
+      {nw} = add(textWidth(tbWho, L.fs), mul(L.pad, 2))
+      {nh} = add(L.lineH, 2)
+      {ny} = sub(L.y, sub(nh, 1))
+      tbFrame(L.x, ny, nw, nh, "rgba(24, 26, 60, 0.95)", tbEdge)
+      drawText(tbWho, add(L.x, L.pad), add(ny, 2), tbWhoColor, L.fs)
+    ]
+    {ink} = tbInk
+    @(not(size(tbWho)))[ ink = tbNarr ]
+    {left} = floor(tbShown)
+    {pg} = get(tbPages, tbPage)
+    %(size(pg), i)[
+      {ln} = get(pg, i)
+      {n} = min(left, size(ln))
+      @(gt(n, 0))[ drawText(slice(ln, 0, n), add(L.x, L.pad), add(add(L.y, L.pad), mul(i, L.lineH)), ink, L.fs) ]
+      left = sub(left, n)
+    ]
+    @(tbDone())[
+      {bob} = mod(floor(div(tbTick, 16)), 2)
+      {ax} = sub(add(L.x, L.w), add(L.pad, 9))
+      {ay} = add(sub(add(L.y, L.h), add(L.pad, 6)), bob)
+      drawRect(ax, ay, 7, 1, tbWhoColor)
+      drawRect(add(ax, 1), add(ay, 1), 5, 1, tbWhoColor)
+      drawRect(add(ax, 2), add(ay, 2), 3, 1, tbWhoColor)
+      drawRect(add(ax, 3), add(ay, 3), 1, 1, tbWhoColor)
+    ]
+  ]
+]
