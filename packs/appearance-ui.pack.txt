@@ -1,0 +1,447 @@
+//@ pack Appearance (UI)
+//@ target ui
+// Adds an Appearance tab next to Play, Code, Audio and Packs: sliders and settings that change how Abyss
+// Engine itself looks. Pick a preset, or mix your own: background hue, color intensity, brightness, accent
+// and highlight colors, code colors, light or dark mode, corner roundness and text sizes.
+// Changes apply right away and are remembered in this browser. They style the editor, not your game's screen.
+// After you turn it on, it starts working the next time Abyss Engine loads.
+//
+// Dependencies: none. It only uses Abyss Engine's own UI code, and every name it adds starts with ap.
+// For other packs: appearanceColor(name) gives the current color text for "deep", "abyss", "trench", "reef",
+// "line", "foam", "mist", "skin", "skin-deep", "glow" or "sand". appearancePreset(name) switches to a preset
+// ("Abyss", "Midnight", "Ember", "Forest", "Violet", "Graphite", "Daylight" or "Paper") and gives true if
+// there is one with that name. A pack that calls either of them should list "Appearance (UI)" as a dependency.
+// This pack only adds things. It does not replace any of the UI's own functions.
+
+{AP_KEY} = "abyss-engine:appearance"
+{apSet} = apLoad()
+{apTimer} = 0
+{apStyle} = false
+{apInputs} = map()
+{apReads} = map()
+{apUnits} = map()
+{apChips} = map()
+{apDarkBtn} = false
+{apLightBtn} = false
+
+// ---------- presets and settings ----------
+
+#apPreset(name, hue, sat, bright, accent, accentSat, glow, codeHue, light)[
+  {p} = map()
+  p.name = name
+  p.hue = hue
+  p.sat = sat
+  p.bright = bright
+  p.accent = accent
+  p.accentSat = accentSat
+  p.glow = glow
+  p.codeHue = codeHue
+  p.light = light
+  p
+]
+
+// hue: background color (200 is Abyss blue). sat: how colorful the background is, in percent.
+// bright: moves the background lighter or darker. accent: color of buttons and highlights (348 is coral).
+// glow: color of links, focus rings and headings. codeHue: turns the code colors round the color wheel.
+#apPresets[
+  list(
+    apPreset("Abyss", 200, 100, 0, 348, 100, 195, 0, false),
+    apPreset("Midnight", 235, 75, -2, 268, 90, 215, 0, false),
+    apPreset("Ember", 12, 55, 0, 24, 105, 38, 0, false),
+    apPreset("Forest", 150, 55, 0, 95, 80, 128, 0, false),
+    apPreset("Violet", 275, 60, 0, 322, 95, 290, 0, false),
+    apPreset("Graphite", 215, 10, 1, 205, 80, 200, 0, false),
+    apPreset("Daylight", 200, 55, 0, 348, 100, 205, 0, true),
+    apPreset("Paper", 38, 45, 2, 14, 100, 28, 0, true)
+  )
+]
+
+// The settings a preset sets. The sizes and roundness are yours and presets leave them alone.
+#apFields[ list("hue", "sat", "bright", "accent", "accentSat", "glow", "codeHue", "light") ]
+
+#apCodeDefault[ @(media("(pointer: coarse)"))[ 16 ][ 14 ] ]
+
+#apDefaults[
+  {d} = apPreset("Abyss", 200, 100, 0, 348, 100, 195, 0, false)
+  d.radius = 10
+  d.uiSize = 15
+  d.codeSize = false
+  d
+]
+
+#apLoad[
+  {d} = apDefaults()
+  {raw} = storeGet(AP_KEY)
+  @(raw)[
+    {saved} = jsonRead(raw)
+    @(and(saved, neq(size(saved), 0)))[
+      %(keys(d), k)[
+        @(and(neq(k, "name"), has(saved, k)))[
+          {v} = get(saved, k)
+          @(or(eq(v, true), eq(v, false)))[ put(d, k, v) ][ put(d, k, number(v)) ]
+        ]
+      ]
+    ]
+  ]
+  d
+]
+
+#apSave[
+  apTimer = add(apTimer, 1)
+  {mine} = apTimer
+  later(400, #[ @(eq(mine, apTimer))[ storeSet(AP_KEY, jsonWrite(apSet)) ] ])
+]
+
+// ---------- making the colors ----------
+
+#apTone(h, sat, l)[
+  join("hsl(", mod(round(h), 360), " ", max(0, min(100, round(sat))), "% ", max(0, min(100, round(l))), "%)")
+]
+
+// One of the blue-green colors Abyss Engine is made of. h, sat and l are its original hue, saturation
+// and lightness. Light mode flips the lightness. bg is true for the backgrounds, which follow brightness.
+#apNeutral(s, h, sat, l, bg)[
+  {lum} = l
+  @(s.light)[ lum = sub(100, l) ]
+  @(bg)[ lum = max(2, min(97, add(lum, s.bright))) ]
+  apTone(add(h, sub(s.hue, 200)), mul(sat, div(s.sat, 100)), lum)
+]
+
+// Every color the editor uses, by the name of its CSS variable, for a set of settings.
+#apColors(s)[
+  {c} = map()
+  put(c, "abyss", apNeutral(s, 200, 55, 13, true))
+  put(c, "trench", apNeutral(s, 199, 54, 17, true))
+  put(c, "reef", apNeutral(s, 197, 50, 24, true))
+  put(c, "line", apNeutral(s, 196, 44, 29, true))
+  put(c, "deep", apNeutral(s, 199, 58, 9, true))
+  put(c, "foam", apNeutral(s, 161, 37, 90, false))
+  put(c, "mist", apNeutral(s, 187, 22, 64, false))
+  {k} = div(s.accentSat, 100)
+  put(c, "skin", apTone(s.accent, mul(75, k), 64))
+  put(c, "skin-deep", apTone(s.accent, mul(54, k), 53))
+  {glowL} = 78
+  {glowS} = 100
+  {sandL} = 79
+  @(s.light)[ glowL = 36 glowS = 85 sandL = 33 ]
+  put(c, "glow", apTone(s.glow, glowS, glowL))
+  put(c, "sand", apTone(sub(s.glow, 156), 75, sandL))
+  c
+]
+
+#apPx(r, m)[ join(round(mul(r, m), 1), "px") ]
+
+// The style sheet for a set of settings. It goes last in the page, so it wins over the built-in look.
+#apCss(s)[
+  {c} = apColors(s)
+  {vars} = list()
+  %(keys(c), name)[ push(vars, join("--", name, ":", get(c, name), ";")) ]
+  {scheme} = "dark"
+  @(s.light)[ scheme = "light" ]
+  {codeFont} = ""
+  @(s.codeSize)[ codeFont = join("--code-font:", s.codeSize, "px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;") ]
+  {rad} = s.radius
+  {pill} = "999px"
+  @(lt(rad, 10))[ pill = apPx(rad, 1.4) ]
+  {r} = list()
+  push(r, join("html:root{color-scheme:", scheme, ";", joinList(vars, ""), codeFont, "}"))
+  push(r, join("body{font-size:", s.uiSize, "px}"))
+  push(r, join(".btn,.prow,.ap-chip{border-radius:", apPx(rad, 1), "}"))
+  push(r, join(".menu,.toast{border-radius:", apPx(rad, 1.2), "}"))
+  push(r, join(".menu button,.sub,.subadd,.subinput{border-radius:", apPx(rad, 0.8), "}"))
+  push(r, join(".proj{border-radius:", apPx(rad, 1.4), "}"))
+  push(r, join(".tabs button{border-radius:", apPx(rad, 0.8), " ", apPx(rad, 0.8), " 0 0}"))
+  push(r, join("#screen,.a-cell,.ap-sw{border-radius:", apPx(rad, 0.6), "}"))
+  push(r, join(".help code{border-radius:", apPx(rad, 0.4), "}"))
+  push(r, join(".views,.views button,.ap-seg,.ap-seg button{border-radius:", pill, "}"))
+  push(r, ".btn:hover{background:var(--line)}")
+  push(r, ".run:hover{background:var(--skin);filter:brightness(1.12)}")
+  push(r, ".run:active{background:var(--skin-deep);filter:none}")
+  @(neq(s.codeHue, 0))[ push(r, join("#hl{filter:hue-rotate(", s.codeHue, "deg)}")) ]
+  @(s.light)[
+    push(r, ".t-com{color:#6f8a90}.t-if{color:#b4570a}.t-loop{color:#7b3fc4}.t-var{color:#1d8a52}.t-num{color:#c0305a}.gutter{color:#7aa0aa}")
+    push(r, "#error{background:#ffe3e8}#errorText{color:#7a1a2e}#errorText b{color:#2a0a12}")
+    push(r, ".suckers button:active{background:radial-gradient(circle at 50% 50%, #f6c3cf 0 52%, var(--skin-deep) 56% 100%)}")
+    push(r, ".menu{box-shadow:0 12px 30px rgba(0,0,0,.15)}.toast{box-shadow:0 10px 30px rgba(0,0,0,.2)}")
+  ]
+  joinList(r, "\n")
+]
+
+#apApply[
+  @(apStyle)[ apStyle.textContent = apCss(apSet) ]
+  {m} = dom("meta[name=theme-color]")
+  @(m)[ m.content = get(apColors(apSet), "trench") ]
+]
+
+// ---------- for other packs ----------
+
+#appearanceColor(name)[ get(apColors(apSet), name) ]
+
+#appearancePreset(name)[
+  {found} = false
+  %(apPresets(), p)[
+    @(eq(p.name, name))[
+      found = true
+      apUse(p)
+    ]
+  ]
+  found
+]
+
+// ---------- changing settings ----------
+
+// Something changed: restyle the page, remember it, and tell the presets whether they still match.
+#apChanged[
+  apApply()
+  apSave()
+  apMarkPresets()
+]
+
+#apUse(p)[
+  %(apFields(), f)[ put(apSet, f, get(p, f)) ]
+  apChanged()
+  apSyncControls()
+]
+
+#apSetLight(on)[
+  apSet.light = on
+  apChanged()
+  apSyncControls()
+]
+
+#apReset[
+  apSet = apDefaults()
+  apChanged()
+  apSyncControls()
+]
+
+#apMatches(p)[
+  {same} = true
+  %(apFields(), f)[ @(neq(get(apSet, f), get(p, f)))[ same = false ] ]
+  same
+]
+
+#apMarkPresets[
+  %(apPresets(), p)[
+    {el} = get(apChips, p.name)
+    @(el)[
+      @(apMatches(p))[ el.dataset.on = "yes" ][ el.dataset.on = "no" ]
+    ]
+  ]
+]
+
+// The number a slider shows. The code text size is "auto" until you move it.
+#apValueOf(key)[
+  {v} = get(apSet, key)
+  @(eq(v, false))[ v = apCodeDefault() ]
+  v
+]
+
+#apShowValue(key)[
+  {v} = apValueOf(key)
+  {t} = join(v, get(apUnits, key))
+  @(and(eq(key, "bright"), gt(v, 0)))[ t = join("+", t) ]
+  @(and(eq(key, "codeSize"), eq(get(apSet, "codeSize"), false)))[ t = join(t, " (auto)") ]
+  {el} = get(apReads, key)
+  el.textContent = t
+]
+
+// Puts every slider, the mode buttons and the preset marks in line with the settings.
+#apSyncControls[
+  %(keys(apInputs), key)[
+    {inp} = get(apInputs, key)
+    inp.value = text(apValueOf(key))
+    apShowValue(key)
+  ]
+  apDarkBtn.dataset.on = "yes"
+  apLightBtn.dataset.on = "no"
+  @(apSet.light)[
+    apDarkBtn.dataset.on = "no"
+    apLightBtn.dataset.on = "yes"
+  ]
+  apMarkPresets()
+]
+
+// ---------- building the tab ----------
+
+#apColorSliders[
+  list(
+    list("hue", "Background hue", 0, 360, 1, "°"),
+    list("sat", "Color intensity", 0, 200, 5, "%"),
+    list("bright", "Brightness", -10, 15, 1, ""),
+    list("accent", "Accent hue", 0, 360, 1, "°"),
+    list("accentSat", "Accent intensity", 0, 130, 5, "%"),
+    list("glow", "Highlight hue", 0, 360, 1, "°"),
+    list("codeHue", "Code colors", -180, 180, 5, "°")
+  )
+]
+
+#apShapeSliders[
+  list(
+    list("radius", "Corner roundness", 0, 24, 1, "px"),
+    list("uiSize", "Interface text size", 12, 20, 1, "px"),
+    list("codeSize", "Code text size", 10, 24, 1, "px")
+  )
+]
+
+#apPaneCss[
+  {r} = list()
+  push(r, ".main[data-view=appearance]{grid-template-columns:minmax(0,1fr)}")
+  push(r, ".main[data-view=appearance] .stage-pane,.main[data-view=appearance] .code-pane{display:none}")
+  push(r, ".main[data-view=appearance] #appearance{display:flex}")
+  push(r, ".ap-gap{flex:1}")
+  push(r, ".ap-scroll{flex:1;min-height:0;overflow:auto;padding:14px 14px 48px}")
+  push(r, ".ap-wrap{max-width:920px;display:flex;flex-direction:column;gap:24px}")
+  push(r, ".ap-label{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--mist);margin:0 0 8px}")
+  push(r, ".ap-presets{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px}")
+  push(r, ".ap-chip{display:flex;flex-direction:column;gap:6px;min-width:0;padding:6px;background:var(--deep);box-shadow:0 0 0 1px var(--line);text-align:left}")
+  push(r, ".ap-chip[data-on=yes]{box-shadow:0 0 0 2px var(--glow)}")
+  push(r, ".ap-sw{height:26px}")
+  push(r, ".ap-chip span{font-size:13px;font-weight:650;color:var(--foam);padding:0 2px}")
+  push(r, ".ap-seg{display:flex;width:max-content;background:var(--deep);padding:3px}")
+  push(r, ".ap-seg button{padding:6px 18px;color:var(--mist);font-weight:600;font-size:14px}")
+  push(r, ".ap-seg button[data-on=yes]{background:var(--reef);color:var(--foam)}")
+  push(r, ".ap-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px 28px}")
+  push(r, ".ap-row{display:flex;flex-direction:column;gap:4px}")
+  push(r, ".ap-top{display:flex;justify-content:space-between;align-items:baseline;font-size:14px;font-weight:600}")
+  push(r, ".ap-val{color:var(--mist);font:12.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}")
+  push(r, ".ap-row input[type=range]{width:100%;height:30px;margin:0;background:transparent;-webkit-appearance:none;appearance:none}")
+  push(r, ".ap-row input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;background:var(--line)}")
+  push(r, ".ap-row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;margin-top:-7px;border-radius:50%;background:var(--skin);border:2px solid var(--foam)}")
+  push(r, ".ap-row input[type=range]::-moz-range-track{height:6px;border-radius:3px;background:var(--line)}")
+  push(r, ".ap-row input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:var(--skin);border:2px solid var(--foam)}")
+  push(r, ".ap-swatches{display:flex;flex-wrap:wrap;gap:6px}")
+  push(r, ".ap-swatches span{width:44px;height:30px;border-radius:7px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.22)}")
+  push(r, ".ap-hint{color:var(--mist);font-size:13px;max-width:62ch}")
+  push(r, "@media (max-width:560px){.bar{gap:6px;padding:8px 6px}.views{min-width:0;overflow-x:auto;scrollbar-width:none}.views::-webkit-scrollbar{display:none}.views button{flex:none;padding:6px 8px;font-size:13px}.bar .btn{padding:0 10px}}")
+  push(r, "@media (max-width:480px){.brand{display:none}}")
+  joinList(r, "\n")
+]
+
+#apAdd(parent, tag, cls, label)[
+  {el} = make(tag)
+  el.className = cls
+  el.textContent = label
+  parent.appendChild(el)
+  el
+]
+
+#apButton(parent, label, fn)[
+  {b} = apAdd(parent, "button", "btn", label)
+  b.type = "button"
+  on(b, "click", fn)
+  b
+]
+
+// A preset button: a strip of its colors above its name.
+#apChip(parent, p)[
+  {b} = apAdd(parent, "button", "ap-chip", "")
+  b.type = "button"
+  b.dataset.on = "no"
+  {c} = apColors(p)
+  {sw} = apAdd(b, "div", "ap-sw", "")
+  sw.style.background = join("linear-gradient(90deg, ", c.deep, " 0 40%, ", c.reef, " 40% 62%, ", c.skin, " 62% 82%, ", c.glow, " 82% 100%)")
+  apAdd(b, "span", "", p.name)
+  put(apChips, p.name, b)
+  on(b, "click", #(e)[ apUse(p) ])
+  b
+]
+
+// A labelled slider. def is list(setting, label, min, max, step, unit).
+#apSlider(parent, def)[
+  {key} = get(def, 0)
+  {row} = apAdd(parent, "div", "ap-row", "")
+  {top} = apAdd(row, "div", "ap-top", "")
+  apAdd(top, "span", "", get(def, 1))
+  put(apReads, key, apAdd(top, "span", "ap-val", ""))
+  put(apUnits, key, get(def, 5))
+  {inp} = apAdd(row, "input", "", "")
+  inp.type = "range"
+  inp.min = text(get(def, 2))
+  inp.max = text(get(def, 3))
+  inp.step = text(get(def, 4))
+  inp.setAttribute("aria-label", get(def, 1))
+  put(apInputs, key, inp)
+  on(inp, "input", #(e)[
+    put(apSet, key, number(inp.value))
+    apShowValue(key)
+    apChanged()
+  ])
+  row
+]
+
+#apInstall[
+  @(not(dom("#appearance")))[
+    {d} = doc()
+    {base} = make("style")
+    base.textContent = apPaneCss()
+    d.head.appendChild(base)
+    apStyle = make("style")
+    d.head.appendChild(apStyle)
+
+    {nav} = dom(".views")
+    {tabBtn} = make("button")
+    tabBtn.setAttribute("role", "tab")
+    tabBtn.setAttribute("aria-selected", "false")
+    tabBtn.dataset.view = "appearance"
+    tabBtn.textContent = "Appearance"
+    nav.appendChild(tabBtn)
+    on(tabBtn, "click", #(e)[ apSyncControls() ])
+
+    {pane} = make("section")
+    pane.id = "appearance"
+    pane.className = "audio-pane"
+    pane.setAttribute("aria-label", "Appearance")
+    dom("#main").appendChild(pane)
+
+    {bar} = apAdd(pane, "div", "a-bar", "")
+    apAdd(bar, "b", "", "Appearance")
+    apAdd(bar, "span", "ap-gap", "")
+    apButton(bar, "Reset", #(e)[ apReset() ])
+
+    {scroll} = apAdd(pane, "div", "ap-scroll", "")
+    {wrap} = apAdd(scroll, "div", "ap-wrap", "")
+
+    {presetBox} = apAdd(wrap, "div", "", "")
+    apAdd(presetBox, "div", "ap-label", "Presets")
+    {chips} = apAdd(presetBox, "div", "ap-presets", "")
+    %(apPresets(), p)[ apChip(chips, p) ]
+
+    {modeBox} = apAdd(wrap, "div", "", "")
+    apAdd(modeBox, "div", "ap-label", "Mode")
+    {seg} = apAdd(modeBox, "div", "ap-seg", "")
+    apDarkBtn = apAdd(seg, "button", "", "Dark")
+    apDarkBtn.type = "button"
+    on(apDarkBtn, "click", #(e)[ apSetLight(false) ])
+    apLightBtn = apAdd(seg, "button", "", "Light")
+    apLightBtn.type = "button"
+    on(apLightBtn, "click", #(e)[ apSetLight(true) ])
+
+    {colorBox} = apAdd(wrap, "div", "", "")
+    apAdd(colorBox, "div", "ap-label", "Colors")
+    {colorGrid} = apAdd(colorBox, "div", "ap-grid", "")
+    %(apColorSliders(), def)[ apSlider(colorGrid, def) ]
+
+    {shapeBox} = apAdd(wrap, "div", "", "")
+    apAdd(shapeBox, "div", "ap-label", "Shape and text")
+    {shapeGrid} = apAdd(shapeBox, "div", "ap-grid", "")
+    %(apShapeSliders(), def)[ apSlider(shapeGrid, def) ]
+
+    {paletteBox} = apAdd(wrap, "div", "", "")
+    apAdd(paletteBox, "div", "ap-label", "Palette now")
+    {swatches} = apAdd(paletteBox, "div", "ap-swatches", "")
+    %(list("deep", "abyss", "trench", "reef", "line", "foam", "mist", "skin", "skin-deep", "glow", "sand"), n)[
+      {sw} = apAdd(swatches, "span", "", "")
+      sw.style.background = join("var(--", n, ")")
+      sw.title = n
+    ]
+
+    apAdd(wrap, "div", "ap-hint", "Changes apply right away and are remembered in this browser. They change how Abyss Engine looks, not your game's screen. Reset puts everything back to the original Abyss look.")
+
+    apApply()
+    apSyncControls()
+  ]
+  true
+]
+
+{apInstalled} = apInstall()

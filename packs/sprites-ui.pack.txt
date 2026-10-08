@@ -1,0 +1,958 @@
+//@ pack Sprites (UI)
+//@ target ui
+// Adds a Sprites tab next to Play, Code, Audio and Packs: a pixel-art editor for your game's sprites.
+// Sprites are saved in a game tab named Sprites (a map called SPRITES_DATA), so they stay with your
+// project and come along when you export the game. Turn on the "Sprites (engine)" pack too, so games
+// can draw them with drawSprite("name", x, y, scale).
+// This pack only adds things. It does not replace any of the UI's own functions.
+
+{SP_ALPHA} = "0123456789abcdefghijklmnopqrstuvwxyz"
+{SP_MARK} = "//@ sprites v1"
+{SP_PAL} = list("#1a1c2c", "#5d275d", "#b13e53", "#ef7d57", "#ffcd75", "#a7f070", "#38b764", "#257179", "#29366f", "#3b5dc9", "#41a6f6", "#73eff7", "#f4f4f4", "#94b0c2", "#566c86", "#333c57")
+
+// ---------- state ----------
+{spList} = list()
+{spSel} = 0
+{spColor} = 0
+{spTool} = "pencil"
+{spUndo} = list()
+{spRedo} = list()
+{spLast} = false
+{spPainting} = false
+{spLastX} = -1
+{spLastY} = -1
+{spCell} = 16
+{spArmed} = false
+{spColorOpen} = false
+
+// ---------- page pieces (made by spInstall) ----------
+{spSelect} = false
+{spEmpty} = false
+{spBody} = false
+{spCanvas} = false
+{spCtx} = false
+{spWrap} = false
+{spPrev} = false
+{spPalBox} = false
+{spColorIn} = false
+{spNameIn} = false
+{spWIn} = false
+{spHIn} = false
+{spSnip} = false
+{spNote} = false
+{spDelBtn} = false
+{spUndoBtn} = false
+{spRedoBtn} = false
+{spToolBtns} = map()
+
+// ---------- look ----------
+#spCss[
+  {r} = list()
+  push(r, ".main[data-view=sprites] { grid-template-columns: minmax(0, 1fr); }")
+  push(r, ".main[data-view=sprites] .stage-pane, .main[data-view=sprites] .code-pane { display: none; }")
+  push(r, ".main[data-view=sprites] #sprites { display: flex; }")
+  push(r, ".sp-bar-gap { flex: 1; }")
+  push(r, ".sp-empty { color: var(--mist); padding: 24px 6px; max-width: 46ch; }")
+  push(r, ".sp-body { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: flex-start; }")
+  push(r, ".sp-left { flex: 1 1 300px; min-width: 0; max-width: 600px; }")
+  push(r, ".sp-right { flex: 1 1 240px; min-width: 220px; max-width: 420px; display: flex; flex-direction: column; gap: 12px; }")
+  push(r, ".sp-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 10px; }")
+  push(r, ".sp-row button { height: 34px; padding: 0 12px; border-radius: 9px; background: var(--reef); font-weight: 650; font-size: 13.5px; }")
+  push(r, ".sp-row button[data-on=\"1\"] { background: var(--skin); color: #fff; }")
+  push(r, ".sp-row button:disabled { opacity: .4; }")
+  push(r, ".sp-row .sp-sep { width: 1px; height: 22px; background: var(--line); margin: 0 2px; }")
+  push(r, ".sp-wrap { width: 100%; }")
+  push(r, "#spCanvas, #spPrev { display: block; image-rendering: pixelated; border-radius: 6px; box-shadow: 0 0 0 1px var(--line); }")
+  push(r, "#spCanvas { touch-action: none; cursor: crosshair; user-select: none; -webkit-user-select: none; }")
+  push(r, "#spPrev { background: #0b1820; max-width: 100%; }")
+  push(r, ".sp-label { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--mist); margin: 0 0 6px; }")
+  push(r, ".sp-pal { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }")
+  push(r, ".sp-sw { aspect-ratio: 1; min-height: 28px; border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .25); }")
+  push(r, ".sp-sw[data-on=\"1\"] { outline: 3px solid var(--glow); outline-offset: 2px; }")
+  push(r, ".sp-in { height: 34px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--abyss); color: var(--foam); font: inherit; min-width: 0; }")
+  push(r, ".sp-in.sp-num { width: 64px; }")
+  push(r, ".sp-in.sp-name { flex: 1; min-width: 100px; }")
+  push(r, ".sp-in.sp-snip { flex: 1; font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }")
+  push(r, "input.sp-color { width: 44px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: none; }")
+  push(r, ".sp-note { color: var(--mist); font-size: 13px; }")
+  push(r, ".sp-note.sp-warn { color: #ffd6de; background: #3a1622; border-radius: 8px; padding: 8px 10px; }")
+  push(r, "@media (max-width: 820px) { .sp-body { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 12px; } .sp-left, .sp-right { display: contents; } .sp-tools { order: 1; margin: 0; } .sp-palbox { order: 2; } .sp-wrap { order: 3; } .sp-ops { order: 4; margin: 0; } .sp-namebox { order: 5; } .sp-prevbox { order: 6; } .sp-usebox { order: 7; } .sp-body .sp-note { order: 8; } }")
+  push(r, "@media (max-width: 560px) { .bar { gap: 6px; padding: 8px 6px; } .views { min-width: 0; overflow-x: auto; scrollbar-width: none; } .views::-webkit-scrollbar { display: none; } .views button { flex: none; padding: 6px 8px; font-size: 13px; } .bar .btn { padding: 0 10px; } }")
+  push(r, "@media (max-width: 480px) { .brand { display: none; } }")
+  joinList(r, "\n")
+]
+
+// ---------- small helpers ----------
+#spAdd(parent, tag, cls, label)[
+  {el} = make(tag)
+  el.className = cls
+  el.textContent = label
+  parent.appendChild(el)
+  el
+]
+
+#spButton(parent, label, fn)[
+  {b} = spAdd(parent, "button", "btn", label)
+  b.type = "button"
+  on(b, "click", fn)
+  b
+]
+
+#spToolButton(parent, label, fn)[
+  {b} = spAdd(parent, "button", "", label)
+  b.type = "button"
+  on(b, "click", fn)
+  b
+]
+
+#spOpButton(parent, label, aria, fn)[
+  {b} = spToolButton(parent, label, fn)
+  b.setAttribute("aria-label", aria)
+  b
+]
+
+#spInput(parent, type, cls)[
+  {i} = spAdd(parent, "input", cls, "")
+  i.type = type
+  i
+]
+
+// "1" or "0", which is what the styles look for.
+#spFlag(on)[ @(on)[ "1" ][ "0" ] ]
+
+#spTrim(t)[
+  {a} = 0
+  {b} = size(t)
+  %(and(lt(a, b), eq(slice(t, a, add(a, 1)), " ")))[ a = add(a, 1) ]
+  %(and(gt(b, a), eq(slice(t, sub(b, 1), b), " ")))[ b = sub(b, 1) ]
+  slice(t, a, b)
+]
+
+// The text between each pair of double quotes on a line.
+#spQuoted(line)[
+  {out} = list()
+  {parts} = split(line, "\"")
+  %(size(parts), i)[ @(eq(mod(i, 2), 1))[ push(out, get(parts, i)) ] ]
+  out
+]
+
+// A name safe to put in quotes and to call from code.
+#spClean(raw)[
+  {out} = ""
+  %(size(raw), i)[
+    {c} = slice(raw, i, add(i, 1))
+    @(has(NAMECH, c))[ out = join(out, c) ][ @(eq(c, " "))[ out = join(out, "_") ] ]
+  ]
+  @(not(size(out)))[ out = "sprite" ]
+  slice(out, 0, 24)
+]
+
+#spNameTaken(nm, skip)[
+  {taken} = false
+  %(size(spList), i)[
+    @(neq(i, skip))[ @(eq(get(get(spList, i), "name"), nm))[ taken = true ] ]
+  ]
+  taken
+]
+
+#spUnique(base, skip)[
+  {nm} = base
+  {n} = 1
+  %(spNameTaken(nm, skip))[
+    n = add(n, 1)
+    nm = join(base, n)
+  ]
+  nm
+]
+
+#spNewSprite(name, w, h)[
+  {s} = map()
+  s.name = name
+  s.w = w
+  s.h = h
+  s.pal = keep(SP_PAL, #(c)[ true ])
+  s.px = list()
+  %(mul(w, h))[ push(s.px, -1) ]
+  s
+]
+
+#spCopyOf(s)[
+  {c} = map()
+  c.name = s.name
+  c.w = s.w
+  c.h = s.h
+  c.pal = keep(s.pal, #(v)[ true ])
+  c.px = keep(s.px, #(v)[ true ])
+  c
+]
+
+#spCur[ @(lt(spSel, size(spList)))[ get(spList, spSel) ][ false ] ]
+
+// ---------- turning sprites into game code, and back ----------
+#spRows(s)[
+  {rows} = list()
+  %(s.h, y)[
+    {line} = ""
+    %(s.w, x)[
+      {v} = get(s.px, add(mul(y, s.w), x))
+      @(lt(v, 0))[ line = join(line, ".") ][ line = join(line, slice(SP_ALPHA, v, add(v, 1))) ]
+    ]
+    push(rows, line)
+  ]
+  rows
+]
+
+#spSerialize[
+  {out} = list(SP_MARK)
+  push(out, "// Made by the Sprites tab. Draw there; edits typed here get replaced the next time you draw.")
+  push(out, "// Draw one in a game with drawSprite(name, x, y, scale). In a row, a dot is see-through and")
+  push(out, "// 0 to 9 then a to z pick a color from the sprite's palette (the first list).")
+  push(out, "{SPRITES_DATA} = map()")
+  %(size(spList), n)[
+    {s} = get(spList, n)
+    push(out, join("put(SPRITES_DATA, ", quote(s.name), ", list("))
+    {colors} = list()
+    %(size(s.pal), i)[ push(colors, quote(get(s.pal, i))) ]
+    push(out, join("  list(", joinList(colors, ", "), "),"))
+    push(out, "  list(")
+    {rows} = spRows(s)
+    %(size(rows), j)[
+      {sep} = ","
+      @(eq(j, sub(size(rows), 1)))[ sep = "" ]
+      push(out, join("    ", quote(get(rows, j)), sep))
+    ]
+    push(out, "  )")
+    push(out, "))")
+  ]
+  joinList(out, "\n")
+]
+
+// Builds a sprite from what the tab says: its name, palette colors and text rows.
+#spFromRows(name, pal, rows)[
+  {w} = 1
+  %(size(rows), j)[ w = max(w, size(get(rows, j))) ]
+  {s} = spNewSprite(name, w, max(1, size(rows)))
+  @(size(pal))[ s.pal = pal ]
+  %(size(rows), j)[
+    {row} = get(rows, j)
+    %(size(row), i)[
+      put(s.px, add(mul(j, w), i), find(SP_ALPHA, slice(row, i, add(i, 1))))
+    ]
+  ]
+  s
+]
+
+#spParse(text)[
+  {out} = list()
+  {name} = false
+  {pal} = list()
+  {rows} = list()
+  %(split(text, "\n"), line)[
+    {t} = spTrim(line)
+    {q} = spQuoted(t)
+    @(eq(slice(t, 0, 18), "put(SPRITES_DATA, "))[
+      @(name)[ push(out, spFromRows(name, pal, rows)) ]
+      name = spClean(get(q, 0))
+      pal = list()
+      rows = list()
+    ][
+      @(name)[
+        @(eq(slice(t, 0, 6), "list(\""))[ pal = q ]
+        @(eq(slice(t, 0, 1), "\""))[ push(rows, get(q, 0)) ]
+      ]
+    ]
+  ]
+  @(name)[ push(out, spFromRows(name, pal, rows)) ]
+  out
+]
+
+#spFindTab[
+  {found} = -1
+  %(size(gameTexts), i)[
+    @(eq(slice(get(gameTexts, i), 0, size(SP_MARK)), SP_MARK))[ found = i ]
+  ]
+  found
+]
+
+// Puts the sprites into the game tab named Sprites (making it the first time).
+#spCommit[
+  {code} = spSerialize()
+  {i} = spFindTab()
+  @(lt(i, 0))[
+    {nm} = "Sprites"
+    {n} = 1
+    %(has(gameNames, nm))[
+      n = add(n, 1)
+      nm = join("Sprites ", n)
+    ]
+    push(gameNames, nm)
+    push(gameTexts, code)
+    i = sub(size(gameTexts), 1)
+  ][ put(gameTexts, i, code) ]
+  composeGame()
+  H.autosave()
+  spLast = code
+  @(eq(tab, "game"))[ renderSubtabs() ]
+  @(and(eq(tab, "game"), eq(gameSel, i)))[ showEditor() ]
+  spUpdateSide()
+]
+
+// If the Sprites tab was changed somewhere else (typed in, or another project opened), read it again.
+// Gives true when that happened.
+#spSync[
+  {i} = spFindTab()
+  {t} = false
+  @(gte(i, 0))[ t = get(gameTexts, i) ]
+  {changed} = false
+  @(neq(t, spLast))[
+    changed = true
+    spLast = t
+    spList = list()
+    @(t)[ spList = spParse(t) ]
+    spSel = min(spSel, max(0, sub(size(spList), 1)))
+    spUndo = list()
+    spRedo = list()
+  ]
+  changed
+]
+
+// ---------- undo ----------
+#spSnap[
+  {s} = spCur()
+  @(s)[
+    push(spUndo, spCopyOf(s))
+    @(gt(size(spUndo), 60))[ removeAt(spUndo, 0) ]
+    spRedo = list()
+  ]
+]
+
+#spApply(s, snap)[
+  s.w = snap.w
+  s.h = snap.h
+  s.pal = keep(snap.pal, #(v)[ true ])
+  s.px = keep(snap.px, #(v)[ true ])
+]
+
+#spUndoNow[
+  @(size(spUndo))[
+    {s} = spCur()
+    push(spRedo, spCopyOf(s))
+    {last} = sub(size(spUndo), 1)
+    spApply(s, get(spUndo, last))
+    removeAt(spUndo, last)
+    spCommit()
+    spRender()
+  ]
+]
+
+#spRedoNow[
+  @(size(spRedo))[
+    {s} = spCur()
+    push(spUndo, spCopyOf(s))
+    {last} = sub(size(spRedo), 1)
+    spApply(s, get(spRedo, last))
+    removeAt(spRedo, last)
+    spCommit()
+    spRender()
+  ]
+]
+
+// ---------- drawing on the sprite ----------
+#spInside(s, x, y)[ and(gte(x, 0), lt(x, s.w), gte(y, 0), lt(y, s.h)) ]
+
+#spPut(x, y, v)[
+  {s} = spCur()
+  @(spInside(s, x, y))[ put(s.px, add(mul(y, s.w), x), v) ]
+]
+
+#spStamp(x, y)[
+  @(eq(spTool, "eraser"))[ spPut(x, y, -1) ][ spPut(x, y, spColor) ]
+]
+
+// Stamps along a line, so a fast drag leaves no gaps.
+#spLine(x0, y0, x1, y1)[
+  {n} = max(abs(sub(x1, x0)), abs(sub(y1, y0)))
+  %(add(n, 1), i)[
+    {t} = 0
+    @(gt(n, 0))[ t = div(i, n) ]
+    spStamp(round(add(x0, mul(sub(x1, x0), t))), round(add(y0, mul(sub(y1, y0), t))))
+  ]
+]
+
+#spFill(x, y, v)[
+  {s} = spCur()
+  {target} = get(s.px, add(mul(y, s.w), x))
+  @(neq(target, v))[
+    {stack} = list(add(mul(y, s.w), x))
+    %(gt(size(stack), 0))[
+      {top} = sub(size(stack), 1)
+      {k} = get(stack, top)
+      removeAt(stack, top)
+      @(eq(get(s.px, k), target))[
+        put(s.px, k, v)
+        {cx} = mod(k, s.w)
+        {cy} = floor(div(k, s.w))
+        @(gt(cx, 0))[ push(stack, sub(k, 1)) ]
+        @(lt(cx, sub(s.w, 1)))[ push(stack, add(k, 1)) ]
+        @(gt(cy, 0))[ push(stack, sub(k, s.w)) ]
+        @(lt(cy, sub(s.h, 1)))[ push(stack, add(k, s.w)) ]
+      ]
+    ]
+  ]
+]
+
+// Which sprite pixel is under the pointer?
+#spCellAt(e)[
+  {s} = spCur()
+  {box} = spCanvas.getBoundingClientRect()
+  {c} = map()
+  c.x = floor(mul(div(sub(e.clientX, box.left), max(1, box.width)), s.w))
+  c.y = floor(mul(div(sub(e.clientY, box.top), max(1, box.height)), s.h))
+  c
+]
+
+#spDown(x, y)[
+  {s} = spCur()
+  @(spInside(s, x, y))[
+    @(eq(spTool, "picker"))[
+      {v} = get(s.px, add(mul(y, s.w), x))
+      @(gte(v, 0))[
+        spColor = v
+        spTool = "pencil"
+      ][ spTool = "eraser" ]
+      spRenderSide()
+    ][
+      spSnap()
+      @(eq(spTool, "fill"))[
+        spFill(x, y, spColor)
+        spCommit()
+      ][
+        spPainting = true
+        spLastX = x
+        spLastY = y
+        spStamp(x, y)
+      ]
+    ]
+    spDraw()
+  ]
+]
+
+#spMove(e)[
+  @(spPainting)[
+    {c} = spCellAt(e)
+    spLine(spLastX, spLastY, c.x, c.y)
+    spLastX = c.x
+    spLastY = c.y
+    spDraw()
+  ]
+]
+
+#spUp[
+  @(spPainting)[
+    spPainting = false
+    spCommit()
+    spDraw()
+  ]
+]
+
+// ---------- whole-sprite edits ----------
+#spFlip(sideways)[
+  {s} = spCur()
+  @(s)[
+    spSnap()
+    {n} = list()
+    %(s.h, y)[
+      %(s.w, x)[
+        @(sideways)[ push(n, get(s.px, add(mul(y, s.w), sub(sub(s.w, 1), x)))) ][
+          push(n, get(s.px, add(mul(sub(sub(s.h, 1), y), s.w), x)))
+        ]
+      ]
+    ]
+    s.px = n
+    spCommit()
+    spDraw()
+  ]
+]
+
+// Moves every pixel by dx, dy and wraps what falls off the edge round to the other side.
+#spShift(dx, dy)[
+  {s} = spCur()
+  @(s)[
+    spSnap()
+    {n} = list()
+    %(s.h, y)[
+      %(s.w, x)[
+        {fx} = mod(add(sub(x, dx), s.w), s.w)
+        {fy} = mod(add(sub(y, dy), s.h), s.h)
+        push(n, get(s.px, add(mul(fy, s.w), fx)))
+      ]
+    ]
+    s.px = n
+    spCommit()
+    spDraw()
+  ]
+]
+
+#spClear[
+  {s} = spCur()
+  @(s)[
+    spSnap()
+    %(size(s.px), i)[ put(s.px, i, -1) ]
+    spCommit()
+    spDraw()
+  ]
+]
+
+#spResize(w, h)[
+  {s} = spCur()
+  @(s)[
+    @(not(gt(w, 0)))[ w = s.w ]
+    @(not(gt(h, 0)))[ h = s.h ]
+    w = max(1, min(64, floor(w)))
+    h = max(1, min(64, floor(h)))
+    @(or(neq(w, s.w), neq(h, s.h)))[
+      spSnap()
+      {n} = list()
+      %(h, y)[
+        %(w, x)[
+          @(and(lt(x, s.w), lt(y, s.h)))[ push(n, get(s.px, add(mul(y, s.w), x))) ][ push(n, -1) ]
+        ]
+      ]
+      s.px = n
+      s.w = w
+      s.h = h
+      spCommit()
+    ]
+    spRender()
+  ]
+]
+
+#spRename(raw)[
+  {s} = spCur()
+  @(s)[
+    {nm} = spClean(raw)
+    @(neq(nm, s.name))[
+      s.name = spUnique(nm, spSel)
+      spCommit()
+    ]
+    spRender()
+  ]
+]
+
+#spNew[
+  push(spList, spNewSprite(spUnique("sprite", -1), 16, 16))
+  spSel = sub(size(spList), 1)
+  spUndo = list()
+  spRedo = list()
+  spArmed = false
+  spCommit()
+  spRender()
+]
+
+#spDuplicate[
+  {s} = spCur()
+  @(s)[
+    {c} = spCopyOf(s)
+    c.name = spUnique(s.name, -1)
+    push(spList, c)
+    spSel = sub(size(spList), 1)
+    spUndo = list()
+    spRedo = list()
+    spCommit()
+    spRender()
+  ]
+]
+
+// Deleting takes two taps: the first turns the button red.
+#spDelete[
+  @(spCur())[
+    @(not(spArmed))[
+      spArmed = true
+      spRenderBar()
+    ][
+      spArmed = false
+      removeAt(spList, spSel)
+      spSel = max(0, min(spSel, sub(size(spList), 1)))
+      spUndo = list()
+      spRedo = list()
+      spCommit()
+      spRender()
+    ]
+  ]
+]
+
+#spSetTool(t)[
+  spTool = t
+  spRenderSide()
+]
+
+#spPick(slot)[
+  spColor = slot
+  @(eq(spTool, "eraser"))[ spTool = "pencil" ]
+  spRenderSide()
+]
+
+// ---------- showing it ----------
+#spEngineOn[
+  {ok} = false
+  @(H.packs)[
+    @(not(H.packs.safe()))[
+      %(H.packs.all(), p)[
+        @(and(get(p, "on"), eq(get(p, "target"), "engine")))[
+          @(gte(find(H.packs.code(get(p, "id")), "#drawSprite"), 0))[ ok = true ]
+        ]
+      ]
+    ]
+  ]
+  ok
+]
+
+#spLayout[
+  {s} = spCur()
+  @(s)[
+    {avail} = spWrap.clientWidth
+    @(lt(avail, 40))[ avail = 320 ]
+    spCell = max(4, min(40, floor(div(min(avail, 560), max(s.w, s.h)))))
+    spCanvas.width = mul(s.w, spCell)
+    spCanvas.height = mul(s.h, spCell)
+    spCanvas.style.width = join(mul(s.w, spCell), "px")
+    spCanvas.style.height = join(mul(s.h, spCell), "px")
+    spCtx = spCanvas.getContext("2d")
+  ]
+]
+
+// Redraws the big editing grid.
+#spDraw[
+  {s} = spCur()
+  @(s)[
+    {cell} = spCell
+    {ctx} = spCtx
+    %(s.h, y)[
+      %(s.w, x)[
+        {v} = get(s.px, add(mul(y, s.w), x))
+        @(lt(v, 0))[
+          @(eq(mod(add(x, y), 2), 0))[ ctx.fillStyle = "#2c3d4f" ][ ctx.fillStyle = "#223140" ]
+        ][ ctx.fillStyle = get(s.pal, v) ]
+        ctx.fillRect(mul(x, cell), mul(y, cell), cell, cell)
+      ]
+    ]
+    @(gte(cell, 8))[
+      ctx.fillStyle = "rgba(0, 0, 0, 0.28)"
+      %(add(s.w, 1), i)[ ctx.fillRect(mul(i, cell), 0, 1, mul(s.h, cell)) ]
+      %(add(s.h, 1), i)[ ctx.fillRect(0, mul(i, cell), mul(s.w, cell), 1) ]
+    ]
+    spDrawPreview()
+  ]
+]
+
+// Small actual-size copies of the sprite, so you can judge how it looks in a game.
+#spDrawPreview[
+  {s} = spCur()
+  @(s)[
+    {scales} = list(1, 2, 4)
+    @(gt(max(s.w, s.h), 32))[ scales = list(1, 2) ]
+    {total} = 0
+    %(scales, k)[ total = add(total, add(mul(s.w, k), 10)) ]
+    {high} = mul(s.h, get(scales, sub(size(scales), 1)))
+    spPrev.width = total
+    spPrev.height = high
+    spPrev.style.width = join(total, "px")
+    spPrev.style.height = join(high, "px")
+    {ctx} = spPrev.getContext("2d")
+    {at} = 4
+    %(scales, k)[
+      %(s.h, y)[
+        %(s.w, x)[
+          {v} = get(s.px, add(mul(y, s.w), x))
+          @(gte(v, 0))[
+            ctx.fillStyle = get(s.pal, v)
+            ctx.fillRect(add(at, mul(x, k)), mul(y, k), k, k)
+          ]
+        ]
+      ]
+      at = add(at, add(mul(s.w, k), 10))
+    ]
+  ]
+]
+
+#spRenderBar[
+  spSelect.innerHTML = ""
+  %(size(spList), i)[
+    {o} = make("option")
+    o.value = text(i)
+    o.textContent = get(get(spList, i), "name")
+    spSelect.appendChild(o)
+  ]
+  spSelect.value = text(spSel)
+  spDelBtn.textContent = "Delete"
+  spDelBtn.dataset.on = "0"
+  @(spArmed)[
+    spDelBtn.textContent = "Delete?"
+    spDelBtn.dataset.on = "1"
+  ]
+]
+
+#spRenderSide[
+  {s} = spCur()
+  @(s)[
+    %(list("pencil", "eraser", "fill", "picker"), t)[
+      {toolEl} = get(spToolBtns, t)
+      toolEl.dataset.on = spFlag(eq(t, spTool))
+    ]
+    spPalBox.innerHTML = ""
+    %(size(s.pal), i)[
+      {slot} = i
+      {sw} = spAdd(spPalBox, "button", "sp-sw", "")
+      sw.type = "button"
+      sw.style.background = get(s.pal, slot)
+      sw.dataset.on = spFlag(eq(slot, spColor))
+      sw.setAttribute("aria-label", join("Color ", add(slot, 1)))
+      on(sw, "click", #(e)[ spPick(slot) ])
+    ]
+    @(lt(spColor, size(s.pal)))[ spColorIn.value = get(s.pal, spColor) ]
+    spUndoBtn.disabled = not(size(spUndo))
+    spRedoBtn.disabled = not(size(spRedo))
+  ]
+]
+
+// The parts that change when the sprite's pixels change but nothing else does.
+#spUpdateSide[
+  {s} = spCur()
+  @(s)[
+    spUndoBtn.disabled = not(size(spUndo))
+    spRedoBtn.disabled = not(size(spRedo))
+    spSnip.value = join("drawSprite(", quote(s.name), ", 100, 100, 4)")
+  ]
+]
+
+#spRender[
+  spRenderBar()
+  {s} = spCur()
+  spEmpty.hidden = false
+  spBody.hidden = true
+  @(s)[
+    spEmpty.hidden = true
+    spBody.hidden = false
+    @(gte(spColor, size(s.pal)))[ spColor = 0 ]
+    spNameIn.value = s.name
+    spWIn.value = text(s.w)
+    spHIn.value = text(s.h)
+    spLayout()
+    spRenderSide()
+    spUpdateSide()
+    spDraw()
+  ]
+  {ok} = spEngineOn()
+  spNote.className = "sp-note"
+  @(ok)[ spNote.textContent = "Show it in your game with drawSprite. Tap Run game to try it." ][
+    spNote.className = "sp-note sp-warn"
+    spNote.textContent = "Games can't draw sprites yet. Turn on the Sprites (engine) pack in the Packs view, then Run."
+  ]
+]
+
+// Called when the Sprites tab is opened.
+#spOpen[
+  spSync()
+  spRender()
+]
+
+// Keeps the view honest if the Sprites game tab changes while it is open (a project was opened, or code was typed).
+#spTick[
+  later(700, #[
+    @(eq(main.dataset.view, "sprites"))[ @(spSync())[ spRender() ] ]
+    spTick()
+  ])
+]
+
+#spKey(e)[
+  {inField} = has(list("INPUT", "TEXTAREA", "SELECT"), e.target.tagName)
+  @(and(eq(main.dataset.view, "sprites"), not(inField), not(e.altKey)))[
+    {ctrl} = or(e.ctrlKey, e.metaKey)
+    {k} = lower(e.key)
+    @(and(ctrl, eq(k, "z")))[
+      e.preventDefault()
+      @(e.shiftKey)[ spRedoNow() ][ spUndoNow() ]
+    ]
+    @(and(ctrl, eq(k, "y")))[
+      e.preventDefault()
+      spRedoNow()
+    ]
+    @(not(ctrl))[
+      @(eq(k, "b"))[ spSetTool("pencil") ]
+      @(eq(k, "e"))[ spSetTool("eraser") ]
+      @(eq(k, "g"))[ spSetTool("fill") ]
+      @(eq(k, "i"))[ spSetTool("picker") ]
+    ]
+  ]
+]
+
+// ---------- building the tab ----------
+#spInstall[
+  @(not(dom("#sprites")))[
+    {d} = doc()
+    {st} = make("style")
+    st.textContent = spCss()
+    d.head.appendChild(st)
+
+    {nav} = dom(".views")
+    {tabBtn} = make("button")
+    tabBtn.setAttribute("role", "tab")
+    tabBtn.setAttribute("aria-selected", "false")
+    tabBtn.dataset.view = "sprites"
+    tabBtn.textContent = "Sprites"
+    nav.insertBefore(tabBtn, nav.lastElementChild)
+    on(tabBtn, "click", #(e)[ later(40, #[ spOpen() ]) ])
+
+    {pane} = make("section")
+    pane.id = "sprites"
+    pane.className = "audio-pane"
+    pane.setAttribute("aria-label", "Sprite maker")
+    dom("#main").appendChild(pane)
+
+    {bar} = spAdd(pane, "div", "a-bar", "")
+    spSelect = spAdd(bar, "select", "sp-in", "")
+    spSelect.setAttribute("aria-label", "Sprite")
+    on(spSelect, "change", #(e)[
+      spSel = number(spSelect.value)
+      spUndo = list()
+      spRedo = list()
+      spArmed = false
+      spRender()
+    ])
+    spButton(bar, "+ New", #(e)[ spNew() ])
+    spButton(bar, "Copy", #(e)[ spDuplicate() ])
+    spDelBtn = spButton(bar, "Delete", #(e)[ spDelete() ])
+    spAdd(bar, "span", "sp-bar-gap", "")
+    {runBtn} = spButton(bar, "▶ Run game", #(e)[
+      run(true)
+      setView("play")
+    ])
+    runBtn.className = "btn run"
+
+    {scroll} = spAdd(pane, "div", "a-scroll", "")
+    spEmpty = spAdd(scroll, "div", "sp-empty", "No sprites yet. Tap + New to draw one. It is saved in a game tab named Sprites, so it stays with your project and comes along when you export the game.")
+    spBody = spAdd(scroll, "div", "sp-body", "")
+
+    {left} = spAdd(spBody, "div", "sp-left", "")
+    {tools} = spAdd(left, "div", "sp-row sp-tools", "")
+    put(spToolBtns, "pencil", spToolButton(tools, "Pencil", #(e)[ spSetTool("pencil") ]))
+    put(spToolBtns, "eraser", spToolButton(tools, "Eraser", #(e)[ spSetTool("eraser") ]))
+    put(spToolBtns, "fill", spToolButton(tools, "Fill", #(e)[ spSetTool("fill") ]))
+    put(spToolBtns, "picker", spToolButton(tools, "Pick", #(e)[ spSetTool("picker") ]))
+    spWrap = spAdd(left, "div", "sp-wrap", "")
+    spCanvas = spAdd(spWrap, "canvas", "", "")
+    spCanvas.id = "spCanvas"
+    spCanvas.width = 256
+    spCanvas.height = 256
+    spCtx = spCanvas.getContext("2d")
+    on(spCanvas, "pointerdown", #(e)[
+      @(spCur())[
+        e.preventDefault()
+        spCanvas.setPointerCapture(e.pointerId)
+        {c} = spCellAt(e)
+        spDown(c.x, c.y)
+      ]
+    ])
+    on(spCanvas, "pointermove", #(e)[ spMove(e) ])
+    on(spCanvas, "pointerup", #(e)[ spUp() ])
+    on(spCanvas, "pointercancel", #(e)[ spUp() ])
+
+    {ops} = spAdd(left, "div", "sp-row sp-ops", "")
+    ops.style.marginTop = "10px"
+    spUndoBtn = spToolButton(ops, "Undo", #(e)[ spUndoNow() ])
+    spRedoBtn = spToolButton(ops, "Redo", #(e)[ spRedoNow() ])
+    spAdd(ops, "span", "sp-sep", "")
+    spToolButton(ops, "Flip ↔", #(e)[ spFlip(true) ])
+    spToolButton(ops, "Flip ↕", #(e)[ spFlip(false) ])
+    spAdd(ops, "span", "sp-sep", "")
+    spOpButton(ops, "←", "Move left", #(e)[ spShift(-1, 0) ])
+    spOpButton(ops, "↑", "Move up", #(e)[ spShift(0, -1) ])
+    spOpButton(ops, "↓", "Move down", #(e)[ spShift(0, 1) ])
+    spOpButton(ops, "→", "Move right", #(e)[ spShift(1, 0) ])
+    spAdd(ops, "span", "sp-sep", "")
+    spToolButton(ops, "Clear", #(e)[ spClear() ])
+
+    {right} = spAdd(spBody, "div", "sp-right", "")
+    {nameBox} = spAdd(right, "div", "sp-namebox", "")
+    spAdd(nameBox, "div", "sp-label", "Name and size")
+    {nameRow} = spAdd(nameBox, "div", "sp-row", "")
+    spNameIn = spInput(nameRow, "text", "sp-in sp-name")
+    spNameIn.setAttribute("aria-label", "Sprite name")
+    spNameIn.maxLength = 24
+    on(spNameIn, "change", #(e)[ spRename(spNameIn.value) ])
+    spWIn = spInput(nameRow, "number", "sp-in sp-num")
+    spWIn.min = "1"
+    spWIn.max = "64"
+    spWIn.setAttribute("aria-label", "Width in pixels")
+    spAdd(nameRow, "span", "sp-note", "×")
+    spHIn = spInput(nameRow, "number", "sp-in sp-num")
+    spHIn.min = "1"
+    spHIn.max = "64"
+    spHIn.setAttribute("aria-label", "Height in pixels")
+    on(spWIn, "change", #(e)[ spResize(number(spWIn.value), number(spHIn.value)) ])
+    on(spHIn, "change", #(e)[ spResize(number(spWIn.value), number(spHIn.value)) ])
+
+    {palBox} = spAdd(right, "div", "sp-palbox", "")
+    spAdd(palBox, "div", "sp-label", "Colors")
+    spPalBox = spAdd(palBox, "div", "sp-pal", "")
+    {colorRow} = spAdd(palBox, "div", "sp-row", "")
+    colorRow.style.marginTop = "10px"
+    spColorIn = spInput(colorRow, "color", "sp-color")
+    spColorIn.setAttribute("aria-label", "Change the selected color")
+    spAdd(colorRow, "span", "sp-note", "Change the selected color")
+    on(spColorIn, "input", #(e)[
+      {s} = spCur()
+      @(s)[
+        @(not(spColorOpen))[
+          spColorOpen = true
+          spSnap()
+        ]
+        put(s.pal, spColor, spColorIn.value)
+        spRenderSideSwatch()
+        spDraw()
+      ]
+    ])
+    on(spColorIn, "change", #(e)[
+      spColorOpen = false
+      spCommit()
+      spRenderSide()
+    ])
+
+    {prevBox} = spAdd(right, "div", "sp-prevbox", "")
+    spAdd(prevBox, "div", "sp-label", "Preview at 1x, 2x, 4x")
+    spPrev = spAdd(prevBox, "canvas", "", "")
+    spPrev.id = "spPrev"
+
+    {useBox} = spAdd(right, "div", "sp-usebox", "")
+    spAdd(useBox, "div", "sp-label", "Use it in your game")
+    {useRow} = spAdd(useBox, "div", "sp-row", "")
+    spSnip = spInput(useRow, "text", "sp-in sp-snip")
+    spSnip.readOnly = true
+    spSnip.setAttribute("aria-label", "Code to draw this sprite")
+    on(spSnip, "focus", #(e)[ spSnip.select() ])
+    spButton(useRow, "Copy", #(e)[
+      spSnip.select()
+      @(exec("copy"))[ toast("Copied.") ][ toast("Select the text and copy it.") ]
+    ])
+    spNote = spAdd(right, "div", "sp-note", "")
+
+    on(d, "keydown", #(e)[ spKey(e) ])
+    on(d.defaultView, "resize", #(e)[ @(eq(main.dataset.view, "sprites"))[ spRender() ] ])
+    spTick()
+  ]
+  true
+]
+
+// Updates just the selected swatch while a color is being picked.
+#spRenderSideSwatch[
+  {s} = spCur()
+  @(s)[
+    {sws} = domAll("#sprites .sp-sw")
+    @(lt(spColor, size(sws)))[
+      {sw} = get(sws, spColor)
+      sw.style.background = get(s.pal, spColor)
+    ]
+  ]
+]
+
+{spInstalled} = spInstall()

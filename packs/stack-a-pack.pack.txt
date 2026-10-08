@@ -1,0 +1,389 @@
+//@ pack stack-a-pack
+//@ target packs
+// Lets two packs change the same function and still both work.
+//
+// Normally, when two packs replace the same function, the one lower in the Packs list wins and the other
+// one is thrown away. This pack changes that. It compares each pack's version with the original function
+// (a three-way merge, line by line) and keeps every change:
+//
+//   - Pack A changes one part of a function and pack B changes another part: both changes are kept.
+//   - Both packs add a different line at the same spot: both lines are added, the earlier pack's first.
+//   - Both packs change the very same lines in different ways: that is a real clash. The pack lower in the
+//     list wins just those lines, and everything else from both packs is still kept.
+//
+// This works best when each pack started from the real function (tap "Insert original" in the Packs view)
+// and only changed the lines it needs. A pack that rewrites a whole function will clash with everything.
+//
+// Changes on lines right next to each other count as the same spot.
+//
+// Overrides: when a pack's version of a function has to count more, add a line to that pack:
+//
+//   //@ override wins #frame    On a clash this pack's lines are kept, even if it is lower in the list.
+//                               Other changes from the other packs are still merged in.
+//   //@ override hard #frame    This pack's #frame is used exactly as written. Other packs' changes to
+//                               #frame are not merged in at all.
+//
+// Overrides are per function. Use {name} for a variable, and one line can name several: //@ override hard #a #b
+// Hard beats wins. If two packs are both hard for the same function, the one lower in the list is used.
+// A mistake in an override line (like a typo in wins or hard) is ignored and shows up in mergeReport().
+//
+// Turn this pack on and the game restarts with it. It takes effect the next time Abyss Engine loads, like
+// all packs for the Packer. Order in the Packs list still matters for clashes and for which line goes first.
+//
+// To see what was merged or clashed, call mergeReport() (it gives a list of notes).
+//
+// It replaces #apply, #where, #disableByName, #setOn and #save in the Packer, and adds functions that start
+// with mg. If you have changed any of those five in the Packer tab, this pack will replace your versions.
+
+{mgParts} = map()
+{mgNotes} = map()
+{mgTouched} = false
+
+// ---------- small list helpers ----------
+
+// Items from..to-1 of a list.
+#mgSlice(items, from, to)[
+  {out} = list()
+  %(sub(to, from), i)[ push(out, get(items, add(from, i))) ]
+  out
+]
+
+#mgAddAll(into, items)[
+  %(size(items), i)[ push(into, get(items, i)) ]
+  into
+]
+
+#mgSame(x, y)[
+  {same} = eq(size(x), size(y))
+  @(same)[
+    %(size(x), i)[ @(neq(get(x, i), get(y, i)))[ same = false ] ]
+  ]
+  same
+]
+
+// ---------- finding what two versions have in common ----------
+
+// For each line of x, which line of y it lines up with (or -1). This is the longest common subsequence.
+#mgMatch(x, y)[
+  {n} = size(x)
+  {m} = size(y)
+  {w} = add(m, 1)
+  // t at (i, j) is how many lines x from i and y from j have in common.
+  {t} = list()
+  %(mul(add(n, 1), w))[ push(t, 0) ]
+  %(n, a)[
+    {i} = sub(sub(n, 1), a)
+    %(m, b)[
+      {j} = sub(sub(m, 1), b)
+      @(eq(get(x, i), get(y, j)))[
+        put(t, add(mul(i, w), j), add(1, get(t, add(mul(add(i, 1), w), add(j, 1)))))
+      ][
+        put(t, add(mul(i, w), j), max(get(t, add(mul(add(i, 1), w), j)), get(t, add(mul(i, w), add(j, 1)))))
+      ]
+    ]
+  ]
+  {res} = list()
+  %(n)[ push(res, -1) ]
+  {xi} = 0
+  {yj} = 0
+  %(and(lt(xi, n), lt(yj, m)))[
+    @(eq(get(x, xi), get(y, yj)))[
+      put(res, xi, yj)
+      xi = add(xi, 1)
+      yj = add(yj, 1)
+    ][
+      @(gte(get(t, add(mul(add(xi, 1), w), yj)), get(t, add(mul(xi, w), add(yj, 1)))))[ xi = add(xi, 1) ][ yj = add(yj, 1) ]
+    ]
+  ]
+  res
+]
+
+// ---------- merging ----------
+
+// Merges two lists of lines, a and b, that both started as the list o. Gives a map with the merged
+// lines and how many clashes there were (places where both changed the same lines).
+// On a clash b wins, or a if preferB is false.
+#mgMerge3(o, a, b, preferB)[
+  {ma} = mgMatch(o, a)
+  {mb} = mgMatch(o, b)
+  {n} = size(o)
+  {out} = list()
+  {clashes} = 0
+  // The last line that o, a and b all still share (-1 before the start).
+  {po} = -1
+  {pa} = -1
+  {pb} = -1
+  %(add(n, 1), k)[
+    // k is the next original line both versions kept. After the last line comes the end of the code.
+    {ia} = size(a)
+    {ib} = size(b)
+    {stable} = true
+    @(lt(k, n))[
+      ia = get(ma, k)
+      ib = get(mb, k)
+      stable = and(gte(ia, 0), gte(ib, 0))
+    ]
+    @(stable)[
+      // Between two shared lines: what the original had, and what each version has there instead.
+      {co} = mgSlice(o, add(po, 1), k)
+      {ca} = mgSlice(a, add(pa, 1), ia)
+      {cb} = mgSlice(b, add(pb, 1), ib)
+      @(mgSame(ca, co))[ mgAddAll(out, cb) ][
+        @(mgSame(cb, co))[ mgAddAll(out, ca) ][
+          @(mgSame(ca, cb))[ mgAddAll(out, ca) ][
+            @(eq(size(co), 0))[
+              // Both added lines at the same spot: keep both.
+              mgAddAll(out, ca)
+              mgAddAll(out, cb)
+            ][
+              // Both changed the same lines: one of them has to win.
+              @(preferB)[ mgAddAll(out, cb) ][ mgAddAll(out, ca) ]
+              clashes = add(clashes, 1)
+            ]
+          ]
+        ]
+      ]
+      @(lt(k, n))[ push(out, get(o, k)) ]
+      po = k
+      pa = ia
+      pb = ib
+    ]
+  ]
+  {res} = map()
+  res.lines = out
+  res.clashes = clashes
+  res
+]
+
+// Merges the text of one function. base is the original, a the earlier pack's version, b the later one's.
+// On a clash b wins, or a if preferB is false.
+#mgMergeText(base, a, b, preferB)[
+  {res} = map()
+  res.clashes = 0
+  @(eq(a, base))[ res.text = b ][
+    @(or(eq(b, base), eq(a, b)))[ res.text = a ][
+      {m} = mgMerge3(split(base, "\n"), split(a, "\n"), split(b, "\n"), preferB)
+      res.text = joinList(m.lines, "\n")
+      res.clashes = m.clashes
+    ]
+  ]
+  res
+]
+
+#mgFindChunk(chunks, key)[
+  {found} = false
+  %(size(chunks), i)[ @(eq(get(get(chunks, i), "key"), key))[ found = get(chunks, i) ] ]
+  found
+]
+
+#mgNote(target, text)[
+  @(not(has(mgNotes, target)))[ put(mgNotes, target, list()) ]
+  push(get(mgNotes, target), text)
+]
+
+// The override lines in a pack: "//@ override wins #name" or "//@ override hard #name". Use {name} for a variable.
+// Gives a map from "fn:name" or "var:name" to "wins" or "hard".
+#mgOverrides(code, pname, target)[
+  {ov} = map()
+  %(split(code, "\n"), line)[
+    {words} = keep(split(line, " "), #(w)[ neq(w, "") ])
+    @(gte(size(words), 2))[
+      @(and(eq(get(words, 0), "//@"), eq(get(words, 1), "override")))[
+        {mode} = ""
+        @(gte(size(words), 3))[ mode = get(words, 2) ]
+        @(has(list("wins", "hard"), mode))[
+          %(size(words), i)[
+            @(gte(i, 3))[
+              {arg} = get(words, i)
+              {first} = slice(arg, 0, 1)
+              @(eq(first, "#"))[ put(ov, join("fn:", slice(arg, 1, size(arg))), mode) ]
+              @(eq(first, "{"))[ put(ov, join("var:", slice(arg, 1, sub(size(arg), 1))), mode) ]
+              @(not(has("#{", first)))[ mgNote(target, join(pname, ": \"", arg, "\" in an override line should be #name or {name}.")) ]
+            ]
+          ]
+        ][ mgNote(target, join(pname, ": an override line needs wins or hard and then the function, like //@ override wins #frame.")) ]
+      ]
+    ]
+  ]
+  ov
+]
+
+// What the last apply did: one note for each function that more than one pack changed.
+#mergeReport[
+  {all} = list()
+  %(keys(mgNotes), t)[ mgAddAll(all, get(mgNotes, t)) ]
+  all
+]
+
+// ---------- the Packer's own functions, with merging ----------
+
+// The target's code with the enabled packs applied. Replaced functions are blanked out in place
+// (so line numbers of everything else stay the same) and the pack code goes on the end.
+// When more than one pack replaces the same function, their changes are merged instead of the last one winning.
+#apply(target, src)[
+  {out} = src
+  {usable} = list()
+  put(mgNotes, target, list())
+  @(not(get(PS, "safe")))[
+    %(get(PS, "items"), p)[ @(and(get(p, "on"), eq(get(meta(get(p, "code")), "target"), target)))[ push(usable, p) ] ]
+  ]
+  @(size(usable))[
+    {baseDefs} = scanDefs(src)
+    {chunks} = list()
+    %(usable, p)[
+      {code} = get(p, "code")
+      {pname} = get(meta(code), "name")
+      {ov} = mgOverrides(code, pname, target)
+      %(scanDefs(code), d)[
+        {b} = findDef(baseDefs, d)
+        @(b)[ @(not(get(b, "gone")))[
+          out = join(slice(out, 0, get(b, "start")), blank(defText(out, b)), slice(out, get(b, "end"), size(out)))
+          put(b, "gone", true)
+        ] ]
+        {key} = join(get(d, "kind"), ":", get(d, "name"))
+        {fresh} = defText(code, d)
+        {mode} = ""
+        @(has(ov, key))[ mode = get(ov, key) ]
+        {before} = mgFindChunk(chunks, key)
+        {chunk} = map()
+        put(chunk, "key", key)
+        put(chunk, "text", fresh)
+        put(chunk, "packs", list(pname))
+        put(chunk, "wins", eq(mode, "wins"))
+        put(chunk, "hard", eq(mode, "hard"))
+        @(before)[
+          {others} = joinList(get(before, "packs"), " + ")
+          @(eq(mode, "hard"))[
+            // A hard override uses this pack's version as it is and drops the other packs' changes to it.
+            @(neq(fresh, get(before, "text")))[
+              mgNote(target, join(pname, " overrides ", get(d, "name"), " hard, so the changes from ", others, " to it were dropped."))
+            ]
+          ][
+            @(get(before, "hard"))[
+              // An earlier pack already overrides this hard. This pack's version is left out.
+              {changed} = neq(fresh, get(before, "text"))
+              @(b)[ changed = neq(fresh, defText(src, b)) ]
+              @(changed)[
+                mgNote(target, join(others, " overrides ", get(d, "name"), " hard, so the change from ", pname, " was left out."))
+              ]
+              chunk = before
+            ][
+              // Normally the later pack wins a clash. A pack marked wins keeps its lines instead.
+              {newWins} = or(eq(mode, "wins"), not(get(before, "wins")))
+              {winner} = others
+              @(newWins)[ winner = pname ]
+              put(chunk, "wins", or(eq(mode, "wins"), get(before, "wins")))
+              @(b)[
+                // Both packs started from the original function, so their changes can be merged.
+                {was} = defText(src, b)
+                {m} = mgMergeText(was, get(before, "text"), fresh, newWins)
+                put(chunk, "text", m.text)
+                {names} = keep(get(before, "packs"), #(v)[ true ])
+                @(and(neq(fresh, was), not(has(names, pname))))[ push(names, pname) ]
+                put(chunk, "packs", names)
+                @(gt(m.clashes, 0))[
+                  mgNote(target, join(joinList(names, " and "), " changed the same lines of ", get(d, "name"), ". ", winner, "'s version was used for those lines."))
+                ]
+              ][
+                // There is no original to compare with, so one pack's version is used as it is.
+                @(neq(fresh, get(before, "text")))[
+                  mgNote(target, join(joinList(get(before, "packs"), " and "), " and ", pname, " both add ", get(d, "name"), ", and they differ. Only ", winner, "'s version was used."))
+                ]
+                @(not(newWins))[ chunk = before ]
+              ]
+            ]
+          ]
+        ]
+        chunks = keep(chunks, #(c)[ neq(get(c, "key"), key) ])
+        {label} = joinList(get(chunk, "packs"), " + ")
+        put(chunk, "pack", label)
+        @(gt(size(get(chunk, "packs")), 1))[ put(mgParts, label, get(chunk, "packs")) ]
+        push(chunks, chunk)
+      ]
+    ]
+    {parts} = list(out)
+    {lastPack} = false
+    %(chunks, c)[
+      @(neq(get(c, "pack"), lastPack))[
+        push(parts, join("\n//@ pack ", get(c, "pack")))
+        lastPack = get(c, "pack")
+      ]
+      push(parts, get(c, "text"))
+    ]
+    out = joinList(parts, "\n")
+  ]
+  put(lastOrig, target, src)
+  put(lastEff, target, out)
+  out
+]
+
+// Which pack to blame for a merged function ("A + B"): the one you just turned on or edited, if it is one of them.
+#mgBlame(label)[
+  {who} = label
+  @(has(mgParts, label))[ @(has(get(mgParts, label), mgTouched))[ who = mgTouched ] ]
+  who
+]
+
+// An error on `line` of a patched target: which pack's code is that? Gives false if it is the tab's own code.
+#where(target, line)[
+  {res} = false
+  {orig} = get(lastOrig, target)
+  @(orig)[
+    @(gt(line, size(split(orig, "\n"))))[
+      {lines} = split(get(lastEff, target), "\n")
+      {k} = min(sub(line, 1), sub(size(lines), 1))
+      %(and(gte(k, 0), not(res)))[
+        {l} = get(lines, k)
+        @(eq(slice(l, 0, 9), "//@ pack "))[
+          res = map()
+          put(res, "pack", mgBlame(slice(l, 9, size(l))))
+          put(res, "line", sub(line, k))
+        ][ k = sub(k, 1) ]
+      ]
+    ]
+  ]
+  res
+]
+
+// Turns off every pack with this name. A merged function is named after all the packs in it ("A + B").
+// If it breaks, the pack you just turned on or edited is the one turned off, so the others keep working.
+// If that pack isn't one of them, they are all turned off.
+#disableByName(name)[
+  {names} = list(name)
+  @(has(mgParts, name))[
+    names = get(mgParts, name)
+    @(has(names, mgTouched))[ names = list(mgTouched) ]
+  ]
+  %(get(PS, "items"), p)[ @(has(names, get(meta(get(p, "code")), "name")))[ put(p, "on", false) ] ]
+  persist()
+]
+
+#setOn(id, on)[
+  {p} = find(id)
+  @(p)[
+    put(p, "on", on)
+    @(on)[ mgTouched = get(meta(get(p, "code")), "name") ]
+  ]
+  persist()
+]
+
+// Remembers the original of each function the pack replaces, so a changed engine can be spotted later.
+#save(id, code, files)[
+  {p} = find(id)
+  @(p)[
+    put(p, "code", code)
+    mgTouched = get(meta(code), "name")
+    {base} = map()
+    {target} = get(meta(code), "target")
+    @(valid(target))[
+      {tsrc} = get(files, target)
+      {tdefs} = scanDefs(tsrc)
+      %(scanDefs(code), d)[
+        {b} = findDef(tdefs, d)
+        @(b)[ put(base, join(get(d, "kind"), ":", get(d, "name")), defText(tsrc, b)) ]
+      ]
+    ]
+    put(p, "base", base)
+    persist()
+  ]
+]

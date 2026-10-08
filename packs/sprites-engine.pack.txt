@@ -1,0 +1,137 @@
+//@ pack Sprites (engine)
+//@ target engine
+// Pixel-art sprites for your game. Draw them in the Sprites tab (needs the "Sprites (UI)" pack),
+// then show them with drawSprite("name", x, y). You can also make sprites in code with spriteAdd.
+//
+//   drawSprite(name, x, y)                 draws it at its own size, top-left corner at x, y
+//   drawSprite(name, x, y, 3)              3 times bigger
+//   drawSprite(name, x, y, 3, true)        3 times bigger and mirrored left to right
+//   spriteWidth(name)  spriteHeight(name)  its size in sprite pixels (multiply by the scale)
+//   hasSprite(name)                        true if the sprite exists
+//   spriteAdd(name, palette, rows)         makes a sprite from code:
+//       spriteAdd("heart", list("#e8607a", "#ffffff"), list(".00.00.", "0010000", "0000000", ".00000.", "..000..", "...0..."))
+//     palette is a list of colors, and each character in a row picks one by place:
+//     0 is the first color, 1 the second, and so on (then a to z). A dot is see-through.
+//
+// Sprites from the Sprites tab live in a game tab named Sprites, in a map called SPRITES_DATA.
+
+{SPRITE_ALPHA} = "0123456789abcdefghijklmnopqrstuvwxyz"
+{spriteCache} = map()
+{spriteWarned} = map()
+
+// Turns a palette and rows of text into a sprite: its size, and the fewest rectangles that paint it.
+#spriteMake(palette, rows)[
+  {sp} = map()
+  {rects} = list()
+  {open} = map()
+  {w} = 0
+  %(size(rows), j)[
+    {row} = get(rows, j)
+    w = max(w, size(row))
+    {i} = 0
+    %(lt(i, size(row)))[
+      {ch} = slice(row, i, add(i, 1))
+      {c} = find(SPRITE_ALPHA, ch)
+      @(and(gte(c, 0), lt(c, size(palette))))[
+        // Run along the row while the pixels match.
+        {k} = add(i, 1)
+        %(and(lt(k, size(row)), eq(slice(row, k, add(k, 1)), ch)))[ k = add(k, 1) ]
+        // A run directly under a run of the same shape and color just makes that rectangle taller.
+        {key} = join(i, ",", sub(k, i), ",", c)
+        {r} = false
+        {taller} = false
+        @(has(open, key))[
+          r = get(open, key)
+          @(eq(add(r.y, r.h), j))[ taller = true ]
+        ]
+        @(taller)[ r.h = add(r.h, 1) ][
+          r = map()
+          r.x = i
+          r.y = j
+          r.w = sub(k, i)
+          r.h = 1
+          r.color = get(palette, c)
+          push(rects, r)
+          put(open, key, r)
+        ]
+        i = k
+      ][ i = add(i, 1) ]
+    ]
+  ]
+  sp.w = w
+  sp.h = size(rows)
+  sp.rects = rects
+  sp
+]
+
+// The sprite called name: one made with spriteAdd, or one from the Sprites tab. False if there isn't one.
+#spriteGet(name)[
+  @(not(has(spriteCache, name)))[
+    {src} = game.SPRITES_DATA
+    @(src)[
+      @(has(src, name))[
+        {d} = get(src, name)
+        put(spriteCache, name, spriteMake(get(d, 0), get(d, 1)))
+      ]
+    ]
+  ]
+  {found} = false
+  @(has(spriteCache, name))[ found = get(spriteCache, name) ]
+  @(not(found))[
+    @(not(has(spriteWarned, name)))[
+      put(spriteWarned, name, true)
+      print(join("There is no sprite called \"", name, "\". Draw one in the Sprites tab, or make one with spriteAdd."))
+    ]
+  ]
+  found
+]
+
+#spriteAdd(name, palette, rows)[
+  put(spriteCache, name, spriteMake(palette, rows))
+  true
+]
+
+#hasSprite(name)[
+  {s} = spriteGet(name)
+  @(s)[ true ][ false ]
+]
+
+#spriteWidth(name)[
+  {s} = spriteGet(name)
+  @(s)[ s.w ][ 0 ]
+]
+
+#spriteHeight(name)[
+  {s} = spriteGet(name)
+  @(s)[ s.h ][ 0 ]
+]
+
+// How far to stretch each block so neighbors overlap a little. The game screen is scaled to fit the window,
+// so a block edge usually lands part-way through a screen pixel, and without this a thin gap shows between blocks.
+#spriteOverlap[
+  {gap} = 0.4
+  {screenEl} = dom("#screen")
+  @(screenEl)[
+    @(gt(screenEl.width, 0))[ gap = min(0.6, div(1.25, div(screenEl.width, max(1, screenWidth())))) ]
+  ]
+  gap
+]
+
+// Draws a sprite with its top-left corner at x, y. Call it from #draw.
+// scale makes it bigger (whole numbers keep the pixels sharp). flip as true mirrors it left to right.
+#drawSprite(name, x, y, scale, flip)[
+  {s} = spriteGet(name)
+  @(s)[
+    @(not(scale))[ scale = 1 ]
+    {ox} = floor(x)
+    {oy} = floor(y)
+    {more} = spriteOverlap()
+    {rects} = s.rects
+    %(size(rects), n)[
+      {r} = get(rects, n)
+      {rx} = r.x
+      @(flip)[ rx = sub(sub(s.w, r.x), r.w) ]
+      drawRect(add(ox, mul(rx, scale)), add(oy, mul(r.y, scale)), add(mul(r.w, scale), more), add(mul(r.h, scale), more), r.color)
+    ]
+  ]
+]
