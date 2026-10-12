@@ -1,0 +1,574 @@
+//@ pack Merge Packs (UI)
+//@ target ui
+// Adds a Merge tab next to Play, Code, Audio and Packs. It takes every pack that is turned on, folds their
+// functions into the Engine, Game, Compiler, UI, Save and Packer code as if you had edited those tabs by
+// hand, and downloads the result as a new copy of Abyss Engine (abyss-engine-merged.html).
+//
+//   How it merges   It uses the Packer's own apply step, so the result is exactly what you get with the packs on:
+//                   the same order (later packs win), and stack-a-pack's merging if that pack is on.
+//                   A function a pack replaces is replaced where it stands. New functions go at the end, under a
+//                   "// From pack: Name" note. A variable a pack replaces is moved to the end, the same place it
+//                   has when the pack is on, so start-up order stays the same.
+//   Packs outside  Packs live in this browser and are shared by all projects, so packs that are not in any project
+//   a project      file are merged too. Only packs that are On count. Safe mode means nothing is merged.
+//   Checking       Abyss Engine compiles everything with the packs on first (like Save does), then compiles the
+//                   merged code before anything is downloaded. If something is wrong, nothing is downloaded.
+//   Your Abyss     Nothing changes here. Your packs, their On/Off state and your tabs stay as they are.
+//   The new file   Its tabs hold the merged code, and the packs that were merged are not in its Packs list,
+//                   because their code is already part of it. Packs that were turned off stay in the list,
+//                   still off.
+//
+// The Merge pack does not build itself into the new file unless you tick Build in this Merge pack too. Until you do,
+// it is not merged, so it stays in the new file's Packs list exactly as it is here.
+//
+// A normal File > Save Abyss Engine writes the packs after the main script, so a copy never finds them when it
+// loads and its Packs view comes up empty. The new file from this pack puts them above the main script, so they load.
+//
+// Heads-up list: before merging it reads each turned-on pack's "Dependencies:" comment. If a pack names another
+// pack that is turned off, you are warned, because the merged code would be missing that pack's functions. It also
+// warns when a pack was made for an older version of a function than the one in your code.
+//
+// What is not merged: top-level lines in a pack that are not a function or a variable (the Packer ignores them
+// too), your saved projects, and which libraries you allowed. The game code that goes in the new file is the open
+// project's. Packs for the UI, Save and Packer tabs start working the next time the new file loads.
+//
+// Dependencies: none. It uses the built-in Packer (the host's packs tools), Abyss Engine's save-and-build hook,
+// and the UI's own fileName and toast. It does not need any other pack.
+// This pack only adds things. It does not replace any of the UI's own functions. Every name it adds starts with
+// mrg or MRG_.
+
+{MRG_TARGETS} = list("engine", "game", "compiler", "ui", "store", "packs")
+{MRG_FILE} = "abyss-engine-merged.html"
+
+// ---------- state ----------
+{mrgSelf} = false
+{mrgBusy} = false
+{mrgGuardFn} = false
+
+// ---------- page pieces (made by mrgInstall) ----------
+{mrgList} = false
+{mrgPlanNote} = false
+{mrgWarn} = false
+{mrgGo} = false
+{mrgMsg} = false
+
+// ---------- look ----------
+#mrgCss[
+  {r} = list()
+  push(r, ".main[data-view=mergepacks] { grid-template-columns: minmax(0, 1fr); }")
+  push(r, ".main[data-view=mergepacks] .stage-pane, .main[data-view=mergepacks] .code-pane { display: none; }")
+  push(r, ".main[data-view=mergepacks] #mergepacks { display: flex; }")
+  push(r, ".mrg-wrap { max-width: 760px; display: flex; flex-direction: column; gap: 14px; }")
+  push(r, ".mrg-card { background: var(--trench); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }")
+  push(r, ".mrg-h { font-weight: 700; font-size: 15px; margin: 0 0 4px; }")
+  push(r, ".mrg-note { color: var(--mist); font-size: 13px; margin: 2px 0 8px; overflow-wrap: anywhere; }")
+  push(r, ".mrg-note.mrg-warn { color: #ffe9c7; background: #3a2c16; border-radius: 8px; padding: 8px 10px; }")
+  push(r, ".mrg-note.mrg-bad { color: #ffd6de; background: #3a1622; border-radius: 8px; padding: 8px 10px; }")
+  push(r, ".mrg-label { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--mist); margin: 10px 0 2px; }")
+  push(r, ".mrg-row { padding: 3px 0; font-size: 14px; overflow-wrap: anywhere; }")
+  push(r, ".mrg-btns { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }")
+  push(r, ".mrg-btns .btn:disabled { opacity: .4; }")
+  push(r, ".mrg-check { display: flex; gap: 8px; align-items: center; padding: 5px 0; font-size: 14px; }")
+  push(r, ".mrg-check input { width: 18px; height: 18px; flex: none; accent-color: var(--skin); }")
+  push(r, ".mrg-check small { color: var(--mist); font-size: 12.5px; }")
+  push(r, "@media (max-width: 560px) { .bar { gap: 6px; padding: 8px 6px; } .views { min-width: 0; overflow-x: auto; scrollbar-width: none; } .views::-webkit-scrollbar { display: none; } .views button { flex: none; padding: 6px 8px; font-size: 13px; } .bar .btn { padding: 0 10px; } }")
+  push(r, "@media (max-width: 480px) { .brand { display: none; } }")
+  joinList(r, "\n")
+]
+
+// ---------- small helpers ----------
+#mrgWin[ doc().defaultView ]
+
+#mrgAdd(parent, tag, cls, label)[
+  {el} = make(tag)
+  el.className = cls
+  el.textContent = label
+  parent.appendChild(el)
+  el
+]
+
+#mrgButton(parent, cls, label, fn)[
+  {b} = mrgAdd(parent, "button", cls, label)
+  b.type = "button"
+  on(b, "click", fn)
+  b
+]
+
+#mrgCheck(parent, label, detail, checked, fn)[
+  {lab} = mrgAdd(parent, "label", "mrg-check", "")
+  {cb} = mrgAdd(lab, "input", "", "")
+  cb.type = "checkbox"
+  cb.checked = checked
+  on(cb, "change", #(e)[ fn(cb.checked) ])
+  mrgAdd(lab, "span", "", label)
+  @(size(detail))[ mrgAdd(lab, "small", "", detail) ]
+  lab
+]
+
+#mrgPlural(n, one, many)[ @(eq(n, 1))[ join(n, " ", one) ][ join(n, " ", many) ] ]
+
+#mrgSay(msg, bad)[
+  mrgMsg.textContent = msg
+  mrgMsg.className = "mrg-note"
+  @(bad)[ mrgMsg.className = "mrg-note mrg-bad" ]
+]
+
+// Hash has no try, so one small JavaScript helper catches errors from the compiler and gives them back.
+#mrgGuard[
+  @(not(mrgGuardFn))[
+    mrgGuardFn = create(mrgWin().Function, "f", "try{return {ok:true,v:f()}}catch(e){return {ok:false,msg:String((e&&e.message)||e),file:String((e&&e.file)||''),line:(e&&e.line)||0}}")
+  ]
+  mrgGuardFn
+]
+
+// The number the compiler uses to tell its own files apart (the same ones Abyss Engine uses).
+#mrgBase(t)[
+  {n} = 3000000
+  @(eq(t, "ui"))[ n = 4000000 ]
+  @(eq(t, "store"))[ n = 5000000 ]
+  @(eq(t, "packs"))[ n = 6000000 ]
+  n
+]
+
+// ---------- which packs ----------
+// The packs that are on, in the order they apply. Nothing is on in safe mode.
+#mrgActive[
+  {rows} = list()
+  @(H.packs)[
+    @(not(H.packs.safe()))[
+      %(H.packs.all(), p)[
+        @(and(get(p, "on"), get(p, "valid")))[ push(rows, p) ]
+      ]
+    ]
+  ]
+  rows
+]
+
+#mrgIsSelf(name)[ or(eq(slice(name, 0, 3), "mrg"), eq(slice(name, 0, 4), "MRG_")) ]
+
+// The first sentence of a pack's "Dependencies:" comment (empty if it has none).
+#mrgDeps(code)[
+  {acc} = ""
+  {state} = 0
+  %(split(code, "\n"), line)[
+    @(eq(state, 0))[
+      @(eq(slice(line, 0, 16), "// Dependencies:"))[
+        acc = slice(line, 16, size(line))
+        state = 1
+        @(eq(slice(line, sub(size(line), 1), size(line)), "."))[ state = 2 ]
+      ]
+    ][
+      @(eq(state, 1))[
+        @(and(gt(size(line), 2), eq(slice(line, 0, 2), "//"), neq(slice(line, 0, 3), "//@")))[
+          acc = join(acc, " ", slice(line, 2, size(line)))
+          @(eq(slice(line, sub(size(line), 1), size(line)), "."))[ state = 2 ]
+        ][ state = 2 ]
+      ]
+    ]
+  ]
+  {stop} = find(acc, ". ", 0)
+  @(gte(stop, 0))[ acc = slice(acc, 0, add(stop, 1)) ]
+  acc
+]
+
+// Things worth knowing before merging.
+#mrgWarnings(rows)[
+  {out} = list()
+  {everyone} = H.packs.all()
+  %(rows, p)[
+    {pid} = get(p, "id")
+    {deps} = mrgDeps(H.packs.code(pid))
+    @(not(has(slice(lower(deps), 0, 8), "none")))[
+      %(everyone, q)[
+        @(and(neq(get(q, "id"), pid), not(get(q, "on")), gt(size(get(q, "name")), 0)))[
+          @(has(deps, get(q, "name")))[
+            push(out, join(get(p, "name"), " lists ", get(q, "name"), " as a dependency, but that pack is turned off. Its functions won't be merged, so ", get(p, "name"), " may not work."))
+          ]
+        ]
+      ]
+    ]
+    {inf} = H.packs.info(pid, H.files)
+    @(size(get(inf, "stale")))[
+      push(out, join(get(p, "name"), " was made for an older version of ", joinList(get(inf, "stale"), ", "), ". Its version will replace the one in your code."))
+    ]
+  ]
+  out
+]
+
+// ---------- folding the packs into the code ----------
+// Which pack is the code at this spot from? The Packer writes "//@ pack Name" before each pack's functions.
+#mrgPackAt(eff, at)[
+  {k} = findLast(eff, "\n//@ pack ", at)
+  {name} = ""
+  @(gte(k, 0))[
+    {e} = find(eff, "\n", add(k, 1))
+    @(lt(e, 0))[ e = size(eff) ]
+    name = slice(eff, add(k, 10), e)
+  ]
+  name
+]
+
+// src is a tab's own code and eff is the same code with the packs applied (what the Packer makes).
+// Gives the code with the packs folded in like normal edits, as a map with text, replaced, added and moved,
+// or false when no pack changes this tab.
+#mrgFold(target, src, eff)[
+  {res} = false
+  @(neq(eff, src))[
+    {base} = H.packs.scanDefs(src)
+    {top} = H.packs.scanDefs(eff)
+    {cut} = size(src)
+    {edits} = map()
+    {tail} = list()
+    {replaced} = list()
+    {added} = list()
+    {moved} = list()
+    %(top, d)[
+      @(gte(get(d, "start"), cut))[
+        {nm} = get(d, "name")
+        {kind} = get(d, "kind")
+        {skip} = and(not(mrgSelf), eq(target, "ui"), mrgIsSelf(nm))
+        @(not(skip))[
+          {orig} = H.packs.findDef(base, d)
+          {code} = H.packs.defText(eff, d)
+          {entry} = map()
+          put(entry, "pack", mrgPackAt(eff, get(d, "start")))
+          put(entry, "code", code)
+          @(and(orig, eq(kind, "fn")))[
+            put(edits, get(orig, "start"), code)
+            push(replaced, join("#", nm))
+          ][
+            @(orig)[
+              put(edits, get(orig, "start"), "")
+              push(moved, join("{", nm, "}"))
+              push(replaced, join("{", nm, "}"))
+            ][
+              @(eq(kind, "fn"))[ push(added, join("#", nm)) ][ push(added, join("{", nm, "}")) ]
+            ]
+            push(tail, entry)
+          ]
+        ]
+      ]
+    ]
+    @(gt(add(size(replaced), size(added)), 0))[
+      {parts} = list()
+      {at} = 0
+      %(base, b)[
+        {s0} = get(b, "start")
+        @(has(edits, s0))[
+          push(parts, slice(src, at, s0))
+          push(parts, get(edits, s0))
+          at = get(b, "end")
+          @(and(eq(get(b, "kind"), "var"), eq(slice(src, at, add(at, 1)), "\n")))[ at = add(at, 1) ]
+        ]
+      ]
+      push(parts, slice(src, at, size(src)))
+      {out} = joinList(parts, "")
+      @(size(tail))[
+        {blocks} = list()
+        {lastPack} = false
+        %(tail, en)[
+          {pk} = get(en, "pack")
+          @(neq(pk, lastPack))[
+            push(blocks, join("// From pack: ", pk, "\n", get(en, "code")))
+            lastPack = pk
+          ][ push(blocks, get(en, "code")) ]
+        ]
+        @(neq(slice(out, sub(size(out), 1), size(out)), "\n"))[ out = join(out, "\n") ]
+        out = join(out, "\n", joinList(blocks, "\n\n"), "\n")
+      ]
+      res = map()
+      put(res, "text", out)
+      put(res, "replaced", replaced)
+      put(res, "added", added)
+      put(res, "moved", moved)
+    ]
+  ]
+  res
+]
+
+// What merging would do to each tab: a map from tab to the result of mrgFold.
+#mrgPlans[
+  {plans} = map()
+  %(MRG_TARGETS, t)[
+    {src} = get(H.files, t)
+    {eff} = H.packs.apply(t, src)
+    {f} = mrgFold(t, src, eff)
+    @(f)[ put(plans, t, f) ]
+  ]
+  plans
+]
+
+#mrgSummary(plans)[
+  {parts} = list()
+  %(MRG_TARGETS, t)[
+    @(has(plans, t))[
+      {pl} = get(plans, t)
+      push(parts, join(fileName(t), ": ", size(get(pl, "replaced")), " replaced, ", size(get(pl, "added")), " added"))
+    ]
+  ]
+  joinList(parts, "; ")
+]
+
+// Every tab's code for the new file: the merged code where packs changed it, the tab as it is otherwise.
+#mrgTexts(plans)[
+  {m} = map()
+  %(MRG_TARGETS, t)[
+    put(m, t, get(H.files, t))
+    @(has(plans, t))[ put(m, t, get(get(plans, t), "text")) ]
+  ]
+  m
+]
+
+// ---------- checking the merged code ----------
+#mrgErrText(label, r)[
+  {where} = label
+  @(size(r.file))[ where = fileName(r.file) ]
+  @(r.line)[ where = join(where, ", line ", r.line) ]
+  join("The merged code didn't compile (", where, "): ", r.msg, " Nothing was exported.")
+]
+
+// Compiles every merged tab with the compiler that is running. Gives an error message, or "" when all is well.
+#mrgVerify(merged)[
+  {err} = ""
+  {win} = mrgWin()
+  {comp} = win.abyssEngine.compiler().c
+  {guard} = mrgGuard()
+  {r} = guard(#[ create(win.Function, "$K", comp.compileProgram(get(merged, "engine"), get(merged, "game"))) ])
+  @(not(r.ok))[ err = mrgErrText("Engine or Game", r) ]
+  %(list("compiler", "ui", "store", "packs"), t)[
+    @(not(size(err)))[
+      {rr} = guard(#[ create(win.Function, "$K", comp.compileLibrary(get(merged, t), t, mrgBase(t))) ])
+      @(not(rr.ok))[ err = mrgErrText(t, rr) ]
+    ]
+  ]
+  err
+]
+
+// ---------- making the file ----------
+// A tab's text is made safe to sit inside a script tag, the same way Abyss Engine does it when it saves.
+#mrgSafe(t)[
+  {s} = joinList(split(t, "</script"), "<\\/script")
+  s = joinList(split(s, "</SCRIPT"), "<\\/SCRIPT")
+  joinList(split(s, "<!--"), "<\\!--")
+]
+
+// Puts new text inside the script tag with this id. Gives false if the tag isn't there.
+#mrgSwap(html, id, content)[
+  {mark} = join("id=", quote(id), ">")
+  {at} = find(html, mark, 0)
+  {res} = false
+  @(gte(at, 0))[
+    {from} = add(at, size(mark))
+    {to} = find(html, "</script>", from)
+    @(gte(to, 0))[ res = join(slice(html, 0, from), "\n", mrgSafe(content), slice(html, to, size(html))) ]
+  ]
+  res
+]
+
+// The packs the new file carries: every pack except the ones that were merged (their code is already in the tabs).
+// A copy of Abyss Engine reads its packs while the page loads, so they have to sit above the main script. A normal
+// Save puts them after it, where they are never found, so they are moved up here.
+#mrgPacksJson(html, ids)[
+  {mark} = "<script type=\"application/json\" id=\"abyss-packs\">"
+  {at} = find(html, mark, 0)
+  {res} = html
+  @(gte(at, 0))[
+    {from} = add(at, size(mark))
+    {to} = find(html, "</script>", from)
+    {data} = false
+    @(gte(to, 0))[ data = jsonRead(slice(html, from, to)) ]
+    @(data)[
+      put(data, "items", keep(get(data, "items"), #(p)[ not(has(ids, get(p, "id"))) ]))
+      put(data, "safe", false)
+      {json} = joinList(split(jsonWrite(data), "<"), "\\u003c")
+      res = join(slice(html, 0, from), json, slice(html, to, size(html)))
+      {without} = join(slice(html, 0, at), slice(html, add(to, 9), size(html)))
+      {spot} = find(without, "<script id=\"abyss-kernel\">", 0)
+      @(gte(spot, 0))[
+        res = join(slice(without, 0, spot), mark, json, "</script>\n", slice(without, spot, size(without)))
+      ]
+    ]
+  ]
+  res
+]
+
+// The ids of the packs that get merged: the ones that are on, except this pack unless it is ticked.
+#mrgMergedIds[
+  {ids} = list()
+  %(mrgActive(), p)[
+    {pid} = get(p, "id")
+    {mine} = has(H.packs.code(pid), "#mrgInstall[")
+    @(or(mrgSelf, not(mine)))[ push(ids, pid) ]
+  ]
+  ids
+]
+
+// A normal Save copy of Abyss Engine, with the merged code put in the tabs.
+#mrgHtml(plans, merged, ids)[
+  {html} = mrgWin().abyssEngine.buildHTML("edit", false)
+  %(keys(plans), t)[
+    @(html)[ html = mrgSwap(html, join("hash-", t), get(merged, t)) ]
+  ]
+  @(html)[ html = mrgPacksJson(html, ids) ]
+  html
+]
+
+#mrgDownload(html)[
+  {win} = mrgWin()
+  {opts} = map()
+  put(opts, "type", "text/html")
+  {blob} = create(win.Blob, list(html), opts)
+  {url} = win.URL.createObjectURL(blob)
+  {a} = make("a")
+  a.href = url
+  a.download = MRG_FILE
+  doc().body.appendChild(a)
+  a.click()
+  a.remove()
+  later(10000, #[ win.URL.revokeObjectURL(url) ])
+  true
+]
+
+// Does everything for the button. Gives a map with ok and msg.
+#mrgDo[
+  {err} = ""
+  {plans} = map()
+  {merged} = map()
+  {ids} = list()
+  {html} = false
+  @(not(H.packs))[ err = "The pack system isn't running, so there is nothing to merge." ]
+  @(and(not(size(err)), H.packs.safe()))[ err = "Safe mode is on, so no packs are applied. Turn it off in the Packs view first." ]
+  @(not(size(err)))[
+    {ce} = H.check()
+    @(ce)[ err = join("A turned-on pack has an error, so nothing was merged: ", ce.msg) ]
+  ]
+  @(not(size(err)))[
+    plans = mrgPlans()
+    @(not(size(keys(plans))))[ err = "No turned-on pack changes any code, so there is nothing to merge." ]
+  ]
+  @(not(size(err)))[
+    merged = mrgTexts(plans)
+    ids = mrgMergedIds()
+    err = mrgVerify(merged)
+  ]
+  @(not(size(err)))[
+    html = mrgHtml(plans, merged, ids)
+    @(not(html))[ err = "Couldn't build the new file. Nothing was exported." ]
+  ]
+  @(not(size(err)))[ mrgDownload(html) ]
+  {out} = map()
+  put(out, "ok", not(size(err)))
+  put(out, "msg", err)
+  @(not(size(err)))[
+    put(out, "msg", join("Exported ", MRG_FILE, ". ", mrgSummary(plans), ". ", mrgPlural(size(ids), "pack was", "packs were"), " merged in and left out of its Packs list. Your packs here were not changed."))
+  ]
+  out
+]
+
+// ---------- showing the tab ----------
+#mrgRender[
+  mrgList.innerHTML = ""
+  mrgWarn.innerHTML = ""
+  mrgPlanNote.textContent = ""
+  mrgPlanNote.className = "mrg-note"
+  mrgGo.disabled = true
+  @(not(H.packs))[
+    mrgPlanNote.textContent = "The pack system isn't running."
+    mrgPlanNote.className = "mrg-note mrg-bad"
+  ][
+    @(H.packs.safe())[
+      mrgPlanNote.textContent = "Safe mode is on, so no packs are applied. Turn it off in the Packs view to merge."
+      mrgPlanNote.className = "mrg-note mrg-bad"
+    ][
+      {rows} = mrgActive()
+      @(not(size(rows)))[
+        mrgPlanNote.textContent = "No packs are turned on. Turn some on in the Packs view, then come back."
+      ][
+        mrgAdd(mrgList, "div", "mrg-label", "Turned on, in the order they apply")
+        %(size(rows), i)[
+          {p} = get(rows, i)
+          mrgAdd(mrgList, "div", "mrg-row", join(add(i, 1), ". ", get(p, "name"), "  ·  ", get(p, "target")))
+        ]
+        {plans} = mrgPlans()
+        @(size(keys(plans)))[
+          mrgPlanNote.textContent = join("What goes into the new file. ", mrgSummary(plans), ".")
+          mrgGo.disabled = mrgBusy
+        ][
+          mrgPlanNote.textContent = "None of the turned-on packs change any code, so there is nothing to merge."
+        ]
+        %(mrgWarnings(rows), w)[ mrgAdd(mrgWarn, "div", "mrg-note mrg-warn", w) ]
+      ]
+    ]
+  ]
+]
+
+#mrgBuild[
+  @(not(mrgBusy))[
+    mrgBusy = true
+    mrgGo.disabled = true
+    mrgSay("Merging, and checking the new code...", false)
+    later(40, #[ mrgFinish() ])
+  ]
+]
+
+#mrgFinish[
+  {r} = mrgDo()
+  mrgBusy = false
+  mrgGo.disabled = false
+  mrgSay(get(r, "msg"), not(get(r, "ok")))
+  @(get(r, "ok"))[ toast(join("Exported ", MRG_FILE, ".")) ]
+]
+
+// Called when the Merge tab is opened.
+#mrgOpen[
+  mrgSay("", false)
+  mrgRender()
+]
+
+// ---------- building the tab ----------
+#mrgInstall[
+  @(not(dom("#mergepacks")))[
+    {d} = doc()
+    {st} = make("style")
+    st.textContent = mrgCss()
+    d.head.appendChild(st)
+
+    {nav} = dom(".views")
+    {tabBtn} = make("button")
+    tabBtn.setAttribute("role", "tab")
+    tabBtn.setAttribute("aria-selected", "false")
+    tabBtn.dataset.view = "mergepacks"
+    tabBtn.textContent = "Merge"
+    nav.appendChild(tabBtn)
+    on(tabBtn, "click", #(e)[ later(40, #[ mrgOpen() ]) ])
+
+    {pane} = make("section")
+    pane.id = "mergepacks"
+    pane.className = "audio-pane"
+    pane.setAttribute("aria-label", "Merge packs")
+    dom("#main").appendChild(pane)
+
+    {scroll} = mrgAdd(pane, "div", "a-scroll", "")
+    {wrap} = mrgAdd(scroll, "div", "mrg-wrap", "")
+    {card} = mrgAdd(wrap, "div", "mrg-card", "")
+    mrgAdd(card, "div", "mrg-h", "Merge turned-on packs into Abyss Engine")
+    mrgAdd(card, "div", "mrg-note", "Folds every pack that is turned on into the Engine, Game, Compiler, UI, Save and Packer code as normal edits, and downloads a new copy of Abyss Engine. Nothing here changes: your packs and tabs stay as they are.")
+    mrgList = mrgAdd(card, "div", "", "")
+    mrgPlanNote = mrgAdd(card, "div", "mrg-note", "")
+    mrgWarn = mrgAdd(card, "div", "", "")
+    mrgAdd(card, "div", "mrg-label", "Options")
+    mrgCheck(card, "Build in this Merge pack too", "off, because it is a tool and not part of your code", mrgSelf, #(v)[
+      mrgSelf = v
+      mrgRender()
+    ])
+    {btns} = mrgAdd(card, "div", "mrg-btns", "")
+    mrgGo = mrgButton(btns, "btn run", "Merge and export", #(e)[ mrgBuild() ])
+    mrgGo.disabled = true
+    mrgButton(btns, "btn", "Refresh", #(e)[ mrgRender() ])
+    mrgMsg = mrgAdd(card, "div", "mrg-note", "")
+    mrgMsg.style.marginTop = "10px"
+  ]
+  true
+]
+
+{mrgInstalled} = mrgInstall()
