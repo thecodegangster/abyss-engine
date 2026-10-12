@@ -1,0 +1,393 @@
+//@ pack Blocks Core (UI)
+//@ target ui
+// The block language itself: what a block is, the list of block kinds, and the code that turns blocks
+// into Hash. It has no screen of its own. Blocks Editor (UI) draws and edits the blocks, and
+// Blocks Basic (UI) fills the palette. Other packs can add their own block kinds (see "Adding blocks").
+//
+//   A block is a map:  id, type, args (input name -> {t: "typed text"} or {b: another block}),
+//                      slots (a list of lists of blocks, for blocks that wrap code).
+//   A workspace is a map: stacks (list of {x, y, blocks}), view ({x, y, z}), next (id counter).
+//   A game tab saved from blocks starts with one line:  //@ blocks v1 {...}   then the Hash made from it.
+//
+// Adding blocks (from any pack that lists Blocks Core (UI) as a dependency):
+//   {d} = bkDef("heal", "stmt", "Player", "Heal")   // type, shape, category, name
+//   d.parts = list("heal", "$amount", "hp")         // words, and $names that become inputs
+//   d.defaults.amount = "10"                        // what an empty input means
+//   d.tpl = "hp = add(hp, $amount)"                 // the Hash it makes
+//   bkAddBlock(d)
+// Shapes: "stmt" (a step), "value" (a round input), "bool" (a pointed input), "wrap" (wraps code in
+// slots; set d.open, d.mids, d.close, d.slots), "hat" (a wrap that sits at the top of a stack).
+// Use bkCategory("Player", "#e8607a") first to give a new category a color.
+//
+// Dependencies: none. It only uses Abyss Engine's own UI code, and every name it adds starts with bk.
+// Turn it On before Blocks Editor (UI) and Blocks Basic (UI).
+
+{bkReg} = map()
+{bkOrder} = list()
+{bkCats} = list()
+{bkCatColor} = map()
+
+// ---------- block kinds ----------
+
+#bkCategory(name, color)[
+  @(not(has(bkCatColor, name)))[ push(bkCats, name) ]
+  put(bkCatColor, name, color)
+  true
+]
+
+#bkDef(type, shape, cat, label)[
+  {d} = map()
+  d.type = type
+  d.shape = shape
+  d.cat = cat
+  d.label = label
+  d.parts = list()
+  d.inputs = list()
+  d.defaults = map()
+  d.tpl = ""
+  d.open = ""
+  d.mids = list()
+  d.close = "]"
+  d.slots = list()
+  d.multiline = list()
+  d.tip = ""
+  d
+]
+
+// Works out the inputs from the $names in parts, then adds the kind (or replaces one with the same type).
+#bkAddBlock(d)[
+  d.inputs = list()
+  %(d.parts, p)[
+    @(eq(slice(p, 0, 1), "$"))[ push(d.inputs, slice(p, 1, size(p))) ]
+  ]
+  @(not(has(bkCatColor, d.cat)))[ bkCategory(d.cat, "#8a96a8") ]
+  @(not(has(bkReg, d.type)))[ push(bkOrder, d.type) ]
+  put(bkReg, d.type, d)
+  d
+]
+
+#bkKind(type)[ @(has(bkReg, type))[ get(bkReg, type) ][ false ] ]
+
+#bkColor(type)[
+  {d} = bkKind(type)
+  @(d)[ get(bkCatColor, d.cat) ][ "#6b7280" ]
+]
+
+// ---------- making blocks ----------
+
+#bkNewId(ws)[
+  ws.next = add(ws.next, 1)
+  join("b", ws.next)
+]
+
+#bkNewWs[
+  {ws} = map()
+  ws.v = 1
+  ws.stacks = list()
+  ws.view = map()
+  ws.view.x = 40
+  ws.view.y = 40
+  ws.view.z = 1
+  ws.next = 0
+  ws
+]
+
+// A new block of this type, with its inputs set to nothing typed and its slots empty.
+#bkMake(ws, type)[
+  {b} = map()
+  b.id = bkNewId(ws)
+  b.type = type
+  b.args = map()
+  b.slots = list()
+  {d} = bkKind(type)
+  @(d)[
+    %(d.inputs, nm)[
+      {a} = map()
+      a.t = ""
+      put(b.args, nm, a)
+    ]
+    %(d.slots, s)[ push(b.slots, list()) ]
+  ]
+  b
+]
+
+// A copy of a block with fresh ids, for Duplicate.
+#bkClone(ws, b)[
+  {c} = map()
+  c.id = bkNewId(ws)
+  c.type = b.type
+  c.args = map()
+  %(keys(b.args), nm)[
+    {a} = get(b.args, nm)
+    {n} = map()
+    @(has(a, "b"))[ n.b = bkClone(ws, a.b) ][ n.t = a.t ]
+    put(c.args, nm, n)
+  ]
+  c.slots = list()
+  %(b.slots, body)[
+    {nb} = list()
+    %(body, k)[ push(nb, bkClone(ws, k)) ]
+    push(c.slots, nb)
+  ]
+  c
+]
+
+// Is this a block that can sit in a list of steps (not a value)?
+#bkIsStep(type)[
+  {d} = bkKind(type)
+  {ok} = true
+  @(d)[ ok = or(eq(d.shape, "stmt"), eq(d.shape, "wrap"), eq(d.shape, "hat")) ]
+  ok
+]
+
+#bkIsValue(type)[
+  {d} = bkKind(type)
+  {ok} = false
+  @(d)[ ok = or(eq(d.shape, "value"), eq(d.shape, "bool")) ]
+  ok
+]
+
+// ---------- making Hash ----------
+
+// Fills a template: every $name is swapped for vals' text. Other text is kept as is.
+#bkFill(tpl, vals)[
+  {out} = list()
+  {n} = size(tpl)
+  {i} = 0
+  %(lt(i, n))[
+    {c} = slice(tpl, i, add(i, 1))
+    {done} = false
+    @(eq(c, "$"))[
+      {j} = add(i, 1)
+      %(and(lt(j, n), has(NAMECH, slice(tpl, j, add(j, 1)))))[ j = add(j, 1) ]
+      {nm} = slice(tpl, add(i, 1), j)
+      @(and(gt(size(nm), 0), has(vals, nm)))[
+        push(out, get(vals, nm))
+        i = j
+        done = true
+      ]
+    ]
+    @(not(done))[
+      push(out, c)
+      i = add(i, 1)
+    ]
+  ]
+  joinList(out, "")
+]
+
+// The text for one input of a block: a block inside it, what was typed, or the kind's default.
+#bkArgText(b, d, nm)[
+  {a} = false
+  @(has(b.args, nm))[ a = get(b.args, nm) ]
+  {t} = ""
+  @(d)[ @(has(d.defaults, nm))[ t = get(d.defaults, nm) ][ t = "0" ] ]
+  @(a)[
+    @(has(a, "b"))[ t = bkExpr(a.b) ][
+      @(gt(size(a.t), 0))[ t = a.t ]
+    ]
+  ]
+  t
+]
+
+#bkVals(b, d)[
+  {vals} = map()
+  %(d.inputs, nm)[ put(vals, nm, bkArgText(b, d, nm)) ]
+  vals
+]
+
+// A block as one piece of Hash text (for value blocks and single-step blocks).
+#bkExpr(b)[
+  {d} = bkKind(b.type)
+  {t} = join("0 // missing block: ", b.type)
+  @(d)[ t = bkFill(d.tpl, bkVals(b, d)) ]
+  t
+]
+
+#bkPad(depth)[
+  {s} = ""
+  %(depth)[ s = join(s, "  ") ]
+  s
+]
+
+// Adds the lines of some text, indented, each remembered as belonging to block id.
+#bkPut(res, text, depth, id)[
+  %(split(text, "\n"), ln)[
+    push(res.lines, join(bkPad(depth), ln))
+    push(res.ids, id)
+  ]
+]
+
+#bkEmitList(res, blocks, depth)[
+  %(blocks, b)[ bkEmit(res, b, depth) ]
+]
+
+#bkEmit(res, b, depth)[
+  {d} = bkKind(b.type)
+  @(not(d))[ bkPut(res, join("// missing block: ", b.type), depth, b.id) ][
+    {vals} = bkVals(b, d)
+    @(or(eq(d.shape, "stmt"), eq(d.shape, "value"), eq(d.shape, "bool")))[
+      bkPut(res, bkFill(d.tpl, vals), depth, b.id)
+    ][
+      bkPut(res, bkFill(d.open, vals), depth, b.id)
+      %(size(d.slots), k)[
+        {body} = get(b.slots, k)
+        // A later slot with nothing in it is left out, so an empty else makes no else.
+        @(or(eq(k, 0), gt(size(body), 0)))[
+          @(gt(k, 0))[ bkPut(res, bkFill(get(d.mids, sub(k, 1)), vals), depth, b.id) ]
+          bkEmitList(res, body, add(depth, 1))
+        ]
+      ]
+      bkPut(res, d.close, depth, b.id)
+    ]
+  ]
+]
+
+// Stacks go top to bottom, then left to right, so the Hash reads the way the blocks sit.
+#bkSortedStacks(ws)[
+  {out} = list()
+  %(ws.stacks, st)[
+    {at} = size(out)
+    {moving} = gt(at, 0)
+    %(moving)[
+      {o} = get(out, sub(at, 1))
+      {before} = or(lt(st.y, o.y), and(eq(st.y, o.y), lt(st.x, o.x)))
+      @(before)[
+        at = sub(at, 1)
+        moving = gt(at, 0)
+      ][ moving = false ]
+    ]
+    {next} = list()
+    %(at, i)[ push(next, get(out, i)) ]
+    push(next, st)
+    %(sub(size(out), at), i)[ push(next, get(out, add(at, i))) ]
+    out = next
+  ]
+  out
+]
+
+// The Hash for a whole workspace: res.lines (the text, line by line) and res.ids (which block made each line).
+#bkGenerate(ws)[
+  {res} = map()
+  res.lines = list()
+  res.ids = list()
+  {first} = true
+  %(bkSortedStacks(ws), st)[
+    // A stack that starts with a lone value block (not a step) makes no code.
+    @(gt(size(st.blocks), 0))[
+      @(bkIsStep(get(st.blocks, 0).type))[
+        @(not(first))[
+          push(res.lines, "")
+          push(res.ids, "")
+        ]
+        first = false
+        bkEmitList(res, st.blocks, 0)
+      ]
+    ]
+  ]
+  res
+]
+
+// ---------- saving and loading ----------
+
+{BK_MARK} = "//@ blocks v1 "
+
+// What goes in the game tab: the marker line with the blocks, then the Hash.
+#bkEncode(ws)[
+  {res} = bkGenerate(ws)
+  join(BK_MARK, jsonWrite(ws), "\n", joinList(res.lines, "\n"))
+]
+
+#bkIsBlocksText(t)[ eq(slice(t, 0, size(BK_MARK)), BK_MARK) ]
+
+// The workspace stored in some game tab text. Old plain code becomes one Raw Hash block. Empty gives an empty workspace.
+#bkDecode(t)[
+  {ws} = false
+  @(bkIsBlocksText(t))[
+    {nl} = find(t, "\n")
+    {line} = t
+    @(gte(nl, 0))[ line = slice(t, 0, nl) ]
+    {saved} = jsonRead(slice(line, size(BK_MARK), size(line)))
+    @(saved)[ ws = saved ]
+  ]
+  @(not(ws))[
+    ws = bkNewWs()
+    @(gt(size(t), 0))[
+      @(neq(size(joinList(split(t, " "), "")), 0))[
+        {raw} = bkMake(ws, "raw")
+        {rawArg} = get(raw.args, "text")
+        rawArg.t = t
+        {st} = map()
+        st.x = 0
+        st.y = 0
+        st.blocks = list(raw)
+        push(ws.stacks, st)
+      ]
+    ]
+  ]
+  ws
+]
+
+// ---------- finding blocks ----------
+
+// The block with this id anywhere in the workspace (also inside inputs), or false.
+#bkFindIn(blocks, id)[
+  {hit} = false
+  %(blocks, b)[
+    @(not(hit))[
+      @(eq(b.id, id))[ hit = b ][
+        %(keys(b.args), nm)[
+          {a} = get(b.args, nm)
+          @(and(not(hit), has(a, "b")))[ hit = bkFindIn(list(a.b), id) ]
+        ]
+        %(b.slots, body)[ @(not(hit))[ hit = bkFindIn(body, id) ] ]
+      ]
+    ]
+  ]
+  hit
+]
+
+#bkFind(ws, id)[
+  {hit} = false
+  %(ws.stacks, st)[ @(not(hit))[ hit = bkFindIn(st.blocks, id) ] ]
+  hit
+]
+
+// The block that made line n (counting from 1) of a game tab saved by bkEncode, or false.
+#bkBlockAtLine(ws, n)[
+  {res} = bkGenerate(ws)
+  {k} = sub(n, 2)
+  @(and(gte(k, 0), lt(k, size(res.ids))))[
+    {id} = get(res.ids, k)
+    @(neq(id, ""))[ id ][ false ]
+  ][ false ]
+]
+
+// ---------- the blocks Core itself gives ----------
+
+#bkCoreKinds[
+  bkCategory("Control", "#e0a030")
+  bkCategory("Hash", "#7b8794")
+
+  // Raw Hash: whatever you type is put in the code as it is. Old code in a tab starts out as one of these.
+  {raw} = bkDef("raw", "stmt", "Hash", "Raw Hash")
+  raw.parts = list("raw", "$text")
+  raw.defaults.text = ""
+  raw.multiline = list("text")
+  raw.tpl = "$text"
+  raw.tip = "Hash code typed as text. It goes into the game exactly as written."
+  bkAddBlock(raw)
+
+  // if / else: the then part and the else part both hold blocks. Leave else empty and no else is made.
+  {iff} = bkDef("if", "wrap", "Control", "if / else")
+  iff.parts = list("if", "$cond")
+  iff.defaults.cond = "true"
+  iff.slots = list("", "else")
+  iff.open = "@($cond)["
+  iff.mids = list("][")
+  iff.close = "]"
+  iff.tip = "Runs the blocks inside if the test is true, and the else blocks if it is not."
+  bkAddBlock(iff)
+  true
+]
+
+{bkCoreReady} = bkCoreKinds()

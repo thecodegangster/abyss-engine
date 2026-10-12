@@ -1,0 +1,147 @@
+//@ pack Blocks Basic (UI)
+//@ target ui
+// The first set of blocks for the block editor: the hat blocks that start a game (#init, #update, #draw),
+// drawing, buttons and touch, variables, math, comparisons, loops, lists, functions, sound and notes.
+// (if / else and Raw Hash come with Blocks Core.)
+//
+// Most inputs take Hash as typed text, like 10, "hello", or score. Drop a round or pointed block
+// into an input to use its answer instead. An input left empty uses the grey example in it.
+//
+// Careful with and / or: like Hash itself, both blocks work out all of their inputs.
+//
+// To add more blocks, make a pack like this one: list Blocks Core (UI) as a dependency and call
+// bkDef / bkAddBlock (see the top of Blocks Core (UI)).
+//
+// Dependencies: Blocks Core (UI). Blocks Editor (UI) is needed to see and use the blocks. Turn Core on first.
+// This pack only adds block kinds. Every name it adds starts with bkb.
+
+// Adds a step, round or pointed block. defs is a list of input name, example, input name, example...
+#bkbAdd(type, shape, cat, parts, tpl, defs)[
+  {d} = bkDef(type, shape, cat, type)
+  d.parts = parts
+  d.tpl = tpl
+  %(div(size(defs), 2), i)[ put(d.defaults, get(defs, mul(i, 2)), get(defs, add(mul(i, 2), 1))) ]
+  bkAddBlock(d)
+]
+
+// Adds a block that wraps code. slots are the names of the bodies ("" for none), mids the code between them.
+#bkbWrap(type, shape, cat, parts, open, slots, mids, defs)[
+  {d} = bkDef(type, shape, cat, type)
+  d.parts = parts
+  d.open = open
+  d.slots = slots
+  d.mids = mids
+  d.close = "]"
+  %(div(size(defs), 2), i)[ put(d.defaults, get(defs, mul(i, 2)), get(defs, add(mul(i, 2), 1))) ]
+  bkAddBlock(d)
+]
+
+#bkbKinds[
+  bkCategory("Game", "#d9a21b")
+  bkCategory("Draw", "#4c97ff")
+  bkCategory("Input", "#25b5c4")
+  bkCategory("Variables", "#ff8c3a")
+  bkCategory("Math", "#4cbf56")
+  bkCategory("Logic", "#3fa7d6")
+  bkCategory("Lists", "#f2546f")
+  bkCategory("Functions", "#9966ff")
+  bkCategory("Sound", "#cf63cf")
+  // Palette order.
+  bkCats = list("Game", "Control", "Draw", "Input", "Variables", "Math", "Logic", "Lists", "Functions", "Sound", "Hash")
+
+  // Game: the three places a game runs from.
+  bkbWrap("when_start", "hat", "Game", list("when game starts"), "#init[", list(""), list(), list())
+  bkbWrap("every_update", "hat", "Game", list("every update (60 a second)"), "#update[", list(""), list(), list())
+  bkbWrap("every_draw", "hat", "Game", list("every draw"), "#draw[", list(""), list(), list())
+  bkbAdd("screen", "stmt", "Game", list("set screen size", "$w", "by", "$h"), "screen($w, $h)", list("w", "320", "h", "240"))
+  bkbAdd("every_n", "stmt", "Game", list("every", "$frames", "frames do", "$action"), "every($frames, $action)", list("frames", "60", "action", "#[ print(\"tick\") ]"))
+  bkbAdd("screen_w", "value", "Game", list("screen width"), "screenWidth()", list())
+  bkbAdd("screen_h", "value", "Game", list("screen height"), "screenHeight()", list())
+  bkbAdd("frame_count", "value", "Game", list("frame count"), "frameCount", list())
+  bkbAdd("fps", "value", "Game", list("fps"), "fps()", list())
+
+  // Control: more ways to repeat.
+  bkbWrap("repeat", "wrap", "Control", list("repeat", "$n", "times"), "%($n)[", list(""), list(), list("n", "10"))
+  bkbWrap("repeat_i", "wrap", "Control", list("repeat", "$n", "times, counting with", "$i"), "%($n, $i)[", list(""), list(), list("n", "10", "i", "i"))
+  bkbWrap("while", "wrap", "Control", list("repeat while", "$test"), "%($test)[", list(""), list(), list("test", "true"))
+  bkbWrap("each", "wrap", "Control", list("for each", "$item", "in", "$list"), "%($list, $item)[", list(""), list(), list("item", "item", "list", "myList"))
+
+  // Draw
+  bkbAdd("clear", "stmt", "Draw", list("clear screen with", "$color"), "clear($color)", list("color", "\"#0f2733\""))
+  bkbAdd("rect", "stmt", "Draw", list("draw rectangle x", "$x", "y", "$y", "w", "$w", "h", "$h", "color", "$color"), "drawRect($x, $y, $w, $h, $color)", list("x", "10", "y", "10", "w", "40", "h", "20", "color", "\"#e8607a\""))
+  bkbAdd("circle", "stmt", "Draw", list("draw circle x", "$x", "y", "$y", "radius", "$r", "color", "$color"), "drawCircle($x, $y, $r, $color)", list("x", "50", "y", "50", "r", "10", "color", "\"#8fe3ff\""))
+  bkbAdd("line", "stmt", "Draw", list("draw line from", "$x1", "$y1", "to", "$x2", "$y2", "color", "$color", "width", "$width"), "drawLine($x1, $y1, $x2, $y2, $color, $width)", list("x1", "0", "y1", "0", "x2", "50", "y2", "50", "color", "\"#ffffff\"", "width", "1"))
+  bkbAdd("text", "stmt", "Draw", list("draw text", "$t", "x", "$x", "y", "$y", "color", "$color", "size", "$size"), "drawText($t, $x, $y, $color, $size)", list("t", "\"Hello\"", "x", "10", "y", "10", "color", "\"#ffffff\"", "size", "12"))
+  bkbAdd("ctext", "stmt", "Draw", list("draw centered text", "$t", "x", "$x", "y", "$y", "color", "$color", "size", "$size"), "drawCenteredText($t, $x, $y, $color, $size)", list("t", "\"Hello\"", "x", "160", "y", "120", "color", "\"#ffffff\"", "size", "16"))
+
+  // Input
+  bkbAdd("key_down", "bool", "Input", list("key held", "$key"), "keyDown($key)", list("key", "\"left\""))
+  bkbAdd("key_pressed", "bool", "Input", list("key pressed", "$key"), "keyPressed($key)", list("key", "\"a\""))
+  bkbAdd("touching", "bool", "Input", list("touching"), "touching()", list())
+  bkbAdd("touch_x", "value", "Input", list("touch x"), "touchX()", list())
+  bkbAdd("touch_y", "value", "Input", list("touch y"), "touchY()", list())
+
+  // Variables
+  bkbAdd("var_make", "stmt", "Variables", list("make variable", "$name", "=", "$value"), "{$name} = $value", list("name", "score", "value", "0"))
+  bkbAdd("var_set", "stmt", "Variables", list("set", "$name", "to", "$value"), "$name = $value", list("name", "score", "value", "0"))
+  bkbAdd("var_change", "stmt", "Variables", list("change", "$name", "by", "$by"), "$name = add($name, $by)", list("name", "score", "by", "1"))
+  bkbAdd("var_get", "value", "Variables", list("$name"), "$name", list("name", "score"))
+  bkbAdd("field_get", "value", "Variables", list("$name", "'s", "$field"), "$name.$field", list("name", "player", "field", "x"))
+  bkbAdd("field_set", "stmt", "Variables", list("set", "$name", "'s", "$field", "to", "$value"), "$name.$field = $value", list("name", "player", "field", "x", "value", "0"))
+
+  // Math
+  bkbAdd("add", "value", "Math", list("$a", "+", "$b"), "add($a, $b)", list("a", "1", "b", "1"))
+  bkbAdd("sub", "value", "Math", list("$a", "−", "$b"), "sub($a, $b)", list("a", "1", "b", "1"))
+  bkbAdd("mul", "value", "Math", list("$a", "×", "$b"), "mul($a, $b)", list("a", "2", "b", "2"))
+  bkbAdd("div", "value", "Math", list("$a", "÷", "$b"), "div($a, $b)", list("a", "4", "b", "2"))
+  bkbAdd("mod", "value", "Math", list("$a", "mod", "$b"), "mod($a, $b)", list("a", "5", "b", "2"))
+  bkbAdd("random", "value", "Math", list("random from", "$lo", "to", "$hi"), "random($lo, $hi)", list("lo", "1", "hi", "10"))
+  bkbAdd("min", "value", "Math", list("smaller of", "$a", "and", "$b"), "min($a, $b)", list("a", "1", "b", "2"))
+  bkbAdd("max", "value", "Math", list("bigger of", "$a", "and", "$b"), "max($a, $b)", list("a", "1", "b", "2"))
+  bkbAdd("abs", "value", "Math", list("absolute", "$a"), "abs($a)", list("a", "-1"))
+  bkbAdd("floor", "value", "Math", list("round down", "$a"), "floor($a)", list("a", "1.5"))
+  bkbAdd("round", "value", "Math", list("round", "$a"), "round($a)", list("a", "1.5"))
+  bkbAdd("clamp", "value", "Math", list("keep", "$v", "between", "$lo", "and", "$hi"), "clamp($v, $lo, $hi)", list("v", "x", "lo", "0", "hi", "100"))
+  bkbAdd("distance", "value", "Math", list("distance from", "$x1", "$y1", "to", "$x2", "$y2"), "distance($x1, $y1, $x2, $y2)", list("x1", "0", "y1", "0", "x2", "3", "y2", "4"))
+
+  // Logic
+  bkbAdd("true", "bool", "Logic", list("true"), "true", list())
+  bkbAdd("false", "bool", "Logic", list("false"), "false", list())
+  bkbAdd("eq", "bool", "Logic", list("$a", "=", "$b"), "eq($a, $b)", list("a", "1", "b", "1"))
+  bkbAdd("neq", "bool", "Logic", list("$a", "≠", "$b"), "neq($a, $b)", list("a", "1", "b", "2"))
+  bkbAdd("lt", "bool", "Logic", list("$a", "<", "$b"), "lt($a, $b)", list("a", "1", "b", "2"))
+  bkbAdd("gt", "bool", "Logic", list("$a", ">", "$b"), "gt($a, $b)", list("a", "2", "b", "1"))
+  bkbAdd("lte", "bool", "Logic", list("$a", "≤", "$b"), "lte($a, $b)", list("a", "1", "b", "2"))
+  bkbAdd("gte", "bool", "Logic", list("$a", "≥", "$b"), "gte($a, $b)", list("a", "2", "b", "1"))
+  bkbAdd("and", "bool", "Logic", list("$a", "and", "$b"), "and($a, $b)", list("a", "true", "b", "true"))
+  bkbAdd("or", "bool", "Logic", list("$a", "or", "$b"), "or($a, $b)", list("a", "true", "b", "false"))
+  bkbAdd("not", "bool", "Logic", list("not", "$a"), "not($a)", list("a", "true"))
+  bkbAdd("overlap", "bool", "Logic", list("rectangles touch", "$ax", "$ay", "$aw", "$ah", "and", "$bx", "$by", "$bw", "$bh"), "overlap($ax, $ay, $aw, $ah, $bx, $by, $bw, $bh)", list("ax", "0", "ay", "0", "aw", "10", "ah", "10", "bx", "5", "by", "5", "bw", "10", "bh", "10"))
+  bkbAdd("join", "value", "Logic", list("join", "$a", "$b"), "join($a, $b)", list("a", "\"score: \"", "b", "score"))
+
+  // Lists
+  bkbAdd("list_make", "stmt", "Lists", list("make list", "$name"), "{$name} = list()", list("name", "myList"))
+  bkbAdd("list_push", "stmt", "Lists", list("add", "$item", "to", "$list"), "push($list, $item)", list("item", "1", "list", "myList"))
+  bkbAdd("list_get", "value", "Lists", list("item", "$i", "of", "$list"), "get($list, $i)", list("i", "0", "list", "myList"))
+  bkbAdd("list_put", "stmt", "Lists", list("set item", "$i", "of", "$list", "to", "$v"), "put($list, $i, $v)", list("i", "0", "list", "myList", "v", "1"))
+  bkbAdd("list_size", "value", "Lists", list("size of", "$list"), "size($list)", list("list", "myList"))
+  bkbAdd("list_has", "bool", "Lists", list("", "$list", "has", "$item"), "has($list, $item)", list("list", "myList", "item", "1"))
+
+  // Functions
+  bkbWrap("fn_def", "hat", "Functions", list("define", "$name", "inputs", "$params"), "#$name($params)[", list(""), list(), list("name", "myFunction", "params", ""))
+  bkbAdd("fn_call", "stmt", "Functions", list("call", "$name", "with", "$args"), "$name($args)", list("name", "myFunction", "args", ""))
+  bkbAdd("fn_value", "value", "Functions", list("answer of", "$name", "with", "$args"), "$name($args)", list("name", "myFunction", "args", ""))
+  bkbAdd("fn_result", "stmt", "Functions", list("answer is", "$value"), "$value", list("value", "0"))
+
+  // Sound
+  bkbAdd("sfx", "stmt", "Sound", list("play sound", "$name"), "sfx($name)", list("name", "\"coin\""))
+  bkbAdd("music", "stmt", "Sound", list("play music", "$song", "tempo", "$bpm", "wave", "$wave"), "music($song, $bpm, $wave)", list("song", "\"C4 E4 G4 E4\"", "bpm", "140", "wave", "\"triangle\""))
+  bkbAdd("stopmusic", "stmt", "Sound", list("stop music"), "stopMusic()", list())
+
+  // Notes and testing
+  bkbAdd("note", "stmt", "Hash", list("note", "$text"), "// $text", list("text", "what this part does"))
+  bkbAdd("print", "stmt", "Hash", list("print", "$v"), "print($v)", list("v", "\"hi\""))
+  true
+]
+
+{bkbReady} = bkbKinds()
