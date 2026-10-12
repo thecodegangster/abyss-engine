@@ -7,6 +7,9 @@
 // Most inputs take Hash as typed text, like 10, "hello", or score. Drop a round or pointed block
 // into an input to use its answer instead. An input left empty uses the grey example in it.
 //
+// Define blocks have a + to add inputs (each gets a name), a category box, and an "answer" switch. Every function
+// shows up as its own block in the category it was put in (a round block if it gives an answer), with its inputs.
+//
 // Careful with and / or: like Hash itself, both blocks work out all of their inputs.
 //
 // To add more blocks, make a pack like this one: list Blocks Core (UI) as a dependency and call
@@ -128,9 +131,15 @@
   bkbAdd("list_has", "bool", "Lists", list("", "$list", "has", "$item"), "has($list, $item)", list("list", "myList", "item", "1"))
 
   // Functions
-  bkbWrap("fn_def", "hat", "Functions", list("define", "$name", "inputs", "$params"), "#$name($params)[", list(""), list(), list("name", "myFunction", "params", ""))
-  bkbAdd("fn_call", "stmt", "Functions", list("call", "$name", "with", "$args"), "$name($args)", list("name", "myFunction", "args", ""))
-  bkbAdd("fn_value", "value", "Functions", list("answer of", "$name", "with", "$args"), "$name($args)", list("name", "myFunction", "args", ""))
+  // The define block has a + for adding named inputs. Call blocks show one input for each input of the function they name.
+  {fd} = bkbWrap("fn_def", "hat", "Functions", list("define", "$name", "in", "$cat"), "#$name($params)[", list(""), list(), list("name", "myFunction", "cat", "Functions"))
+  fd.hasParams = true
+  {fc} = bkbAdd("fn_call", "stmt", "Functions", list(), "$name($args)", list("name", "myFunction", "args", ""))
+  fc.dynCall = true
+  fc.hidden = true
+  {fv} = bkbAdd("fn_value", "value", "Functions", list(), "$name($args)", list("name", "myFunction", "args", ""))
+  fv.dynCall = true
+  fv.hidden = true
   bkbAdd("fn_result", "stmt", "Functions", list("answer is", "$value"), "$value", list("value", "0"))
 
   // Sound

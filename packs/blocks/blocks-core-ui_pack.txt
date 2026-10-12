@@ -15,6 +15,10 @@
 //   d.defaults.amount = "10"                        // what an empty input means
 //   d.tpl = "hp = add(hp, $amount)"                 // the Hash it makes
 //   bkAddBlock(d)
+// d.hasParams = true lets a block hold a list of named inputs (b.params), with a + to add more (used by
+// function definitions; they also have a category input named "cat" and an answer switch, b.ret).
+// d.dynCall = true makes a call block whose inputs follow the function it names.
+// d.hidden = true keeps a kind out of the palette (it still works when it is in a saved project).
 // Shapes: "stmt" (a step), "value" (a round input), "bool" (a pointed input), "wrap" (wraps code in
 // slots; set d.open, d.mids, d.close, d.slots), "hat" (a wrap that sits at the top of a stack).
 // Use bkCategory("Player", "#e8607a") first to give a new category a color.
@@ -26,6 +30,9 @@
 {bkOrder} = list()
 {bkCats} = list()
 {bkCatColor} = map()
+{bkCur} = false
+{bkTabCache} = map()
+{BK_AUTO} = list("#9966ff", "#ff6b9d", "#2fb89a", "#e08a2c", "#5b8def", "#b5c43a", "#d9534f", "#7a8cff")
 
 // ---------- block kinds ----------
 
@@ -50,6 +57,9 @@
   d.close = "]"
   d.slots = list()
   d.multiline = list()
+  d.hasParams = false
+  d.dynCall = false
+  d.hidden = false
   d.tip = ""
   d
 ]
@@ -107,6 +117,10 @@
       put(b.args, nm, a)
     ]
     %(d.slots, s)[ push(b.slots, list()) ]
+    @(d.hasParams)[
+      b.params = list()
+      b.ret = false
+    ]
   ]
   b
 ]
@@ -123,6 +137,11 @@
     @(has(a, "b"))[ n.b = bkClone(ws, a.b) ][ n.t = a.t ]
     put(c.args, nm, n)
   ]
+  @(has(b, "params"))[
+    c.params = list()
+    %(b.params, p)[ push(c.params, p) ]
+  ]
+  @(has(b, "ret"))[ c.ret = b.ret ]
   c.slots = list()
   %(b.slots, body)[
     {nb} = list()
@@ -192,6 +211,11 @@
 #bkVals(b, d)[
   {vals} = map()
   %(d.inputs, nm)[ put(vals, nm, bkArgText(b, d, nm)) ]
+  @(d.hasParams)[ put(vals, "params", joinList(bkParamsOf(b), ", ")) ]
+  @(d.dynCall)[
+    put(vals, "name", bkArgText(b, d, "name"))
+    put(vals, "args", bkCallArgs(b, d))
+  ]
   vals
 ]
 
@@ -267,6 +291,7 @@
 
 // The Hash for a whole workspace: res.lines (the text, line by line) and res.ids (which block made each line).
 #bkGenerate(ws)[
+  bkCur = ws
   {res} = map()
   res.lines = list()
   res.ids = list()
@@ -360,6 +385,109 @@
     {id} = get(res.ids, k)
     @(neq(id, ""))[ id ][ false ]
   ][ false ]
+]
+
+// ---------- function inputs ----------
+
+#bkParamsOf(b)[ @(has(b, "params"))[ b.params ][ list() ] ]
+
+// The name of a definition block ("" when a block sits in its name).
+// An empty name box counts as the grey example in it, like everywhere else.
+#bkDefName(b)[
+  {a} = get(b.args, "name")
+  {n} = ""
+  @(has(a, "t"))[ n = bkArgText(b, bkKind(b.type), "name") ]
+  n
+]
+
+// Every function definition: the ones on this canvas, then the ones on the other game tabs.
+#bkCollectDefs(blocks, out)[
+  %(blocks, b)[
+    @(eq(b.type, "fn_def"))[ push(out, b) ]
+    %(b.slots, body)[ bkCollectDefs(body, out) ]
+  ]
+  out
+]
+
+#bkOtherDefs[
+  {out} = list()
+  %(size(gameTexts), i)[
+    @(neq(i, gameSel))[
+      {t} = get(gameTexts, i)
+      @(bkIsBlocksText(t))[
+        {k} = join("t", i)
+        {c} = false
+        @(has(bkTabCache, k))[ c = get(bkTabCache, k) ]
+        {stale} = not(c)
+        @(c)[ stale = neq(c.text, t) ]
+        @(stale)[
+          c = map()
+          c.text = t
+          c.defs = list()
+          {w} = bkDecode(t)
+          %(w.stacks, st)[ bkCollectDefs(st.blocks, c.defs) ]
+          put(bkTabCache, k, c)
+        ]
+        %(c.defs, d)[ push(out, d) ]
+      ]
+    ]
+  ]
+  out
+]
+
+#bkAllDefs(ws)[
+  {out} = list()
+  @(ws)[ %(ws.stacks, st)[ bkCollectDefs(st.blocks, out) ] ]
+  %(bkOtherDefs(), d)[ push(out, d) ]
+  out
+]
+
+// The definition block of the function with this name (on this canvas first, then the other tabs), or false.
+#bkFnDefFor(ws, name)[
+  {hit} = false
+  %(bkAllDefs(ws), d)[ @(not(hit))[ @(eq(bkDefName(d), name))[ hit = d ] ] ]
+  hit
+]
+
+// The category a function was put in, and whether it gives an answer.
+#bkDefCat(def)[
+  {c} = bkArgText(def, bkKind("fn_def"), "cat")
+  @(eq(size(c), 0))[ "Functions" ][ c ]
+]
+
+#bkDefIsAnswer(def)[ and(has(def, "ret"), eq(def.ret, true)) ]
+
+// The color of a category, giving a new one a color when it has none.
+#bkCatColorFor(cat)[
+  @(not(has(bkCatColor, cat)))[
+    // The first spare color that no category is using yet.
+    {pick} = get(BK_AUTO, mod(size(bkCats), size(BK_AUTO)))
+    {found} = false
+    %(BK_AUTO, c)[
+      @(not(found))[
+        {used} = false
+        %(bkCats, k)[ @(eq(get(bkCatColor, k), c))[ used = true ] ]
+        @(not(used))[
+          pick = c
+          found = true
+        ]
+      ]
+    ]
+    bkCategory(cat, pick)
+  ]
+  get(bkCatColor, cat)
+]
+
+// The inputs of a call block: one per input of the function it names, or the one free text if there is no such function.
+#bkCallArgs(b, d)[
+  {def} = bkFnDefFor(bkCur, bkArgText(b, d, "name"))
+  {out} = ""
+  @(def)[
+    {parts} = list()
+    %(size(bkParamsOf(def)), i)[ push(parts, bkArgText(b, d, join("p", i))) ]
+    out = joinList(parts, ", ")
+  ][ out = bkArgText(b, d, "args") ]
+  out
 ]
 
 // ---------- the blocks Core itself gives ----------

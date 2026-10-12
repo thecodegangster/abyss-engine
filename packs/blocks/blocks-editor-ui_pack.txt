@@ -54,6 +54,10 @@
 {bkEdgeOn} = false
 {bkBtns} = map()
 {bkShowHash} = false
+{bkFns} = false
+{bkCatList} = false
+{bkFnDefs} = list()
+{bkPalSig} = ""
 {bkPalN} = 0
 {bkPal} = false
 {bkErrSeen} = ""
@@ -109,6 +113,10 @@
   push(r, ".bk-mid{background:var(--c);padding:4px 10px;min-height:22px;display:flex;align-items:center;gap:6px}")
   push(r, ".bk-slot{display:flex;flex-direction:column;align-items:flex-start;min-height:30px;padding:3px 6px 3px 16px;background:linear-gradient(var(--c),var(--c)) left top/14px 100% no-repeat,rgba(0,0,0,.18)}")
   push(r, ".bk-foot{background:var(--c);height:14px;border-radius:0 0 8px 8px}")
+  push(r, ".bk-mini{background:rgba(255,255,255,.28);color:#fff;border:0;border-radius:11px;min-width:22px;height:22px;font:700 14px/1 system-ui,sans-serif;padding:0 6px;margin:0 2px;cursor:pointer;touch-action:manipulation}")
+  push(r, ".bk-items .bk-mini{pointer-events:none}")
+  push(r, ".bk-ret{padding:0 9px;font-size:12px}")
+  push(r, ".bk-param{min-width:2.4em}")
   push(r, ".bk-sel{outline:2px solid #fff;outline-offset:1px}")
   push(r, ".bk-err{outline:3px solid #ff3b5c;outline-offset:1px}")
   push(r, ".bk-hot{outline:2px dashed #fff;outline-offset:1px}")
@@ -164,6 +172,7 @@
 
 // One input of a block: the block sitting in it, or a text field.
 #bkInputEl(b, d, nm, pal)[
+  @(not(has(b.args, nm)))[ put(b.args, nm, bkTextArg()) ]
   {a} = get(b.args, nm)
   {box} = bkMk("span", "bk-in")
   box.dataset.owner = b.id
@@ -180,12 +189,16 @@
     @(has(d.defaults, nm))[ inp.placeholder = get(d.defaults, nm) ][ inp.placeholder = "0" ]
     inp.value = a.t
     bkFit(inp, multi)
+    @(and(eq(nm, "name"), d.dynCall))[ inp.setAttribute("list", "bkFns") ]
+    @(and(eq(nm, "cat"), d.hasParams))[ inp.setAttribute("list", "bkCatList") ]
     @(pal)[ inp.disabled = true ][
       on(inp, "input", #(e)[
         a.t = inp.value
         bkFit(inp, multi)
         bkTouched()
       ])
+      // Calls look up their function by this name, so the blocks are drawn again once it is set.
+      @(and(or(eq(nm, "name"), eq(nm, "cat")), or(d.dynCall, d.hasParams)))[ on(inp, "change", #(e)[ bkChanged() ]) ]
     ]
     box.appendChild(inp)
   ]
@@ -199,6 +212,165 @@
       {t} = bkMk("span", "bk-t")
       t.textContent = p
       parent.appendChild(t)
+    ]
+  ]
+  @(d.hasParams)[ bkParamEls(b, parent, pal) ]
+  @(d.dynCall)[ bkCallEls(b, d, parent, pal) ]
+]
+
+// Named inputs on a definition block, with x to remove one and + to add one.
+#bkParamEls(b, parent, pal)[
+  {ps} = bkParamsOf(b)
+  %(size(ps), i)[
+    {k} = i
+    {box} = bkMk("span", "bk-in")
+    {inp} = bkMk("input", "bk-field bk-param")
+    inp.type = "text"
+    inp.spellcheck = false
+    inp.setAttribute("autocapitalize", "off")
+    inp.placeholder = "name"
+    inp.value = get(ps, k)
+    bkFit(inp, false)
+    @(pal)[ inp.disabled = true ][
+      on(inp, "input", #(e)[
+        put(b.params, k, inp.value)
+        bkFit(inp, false)
+        bkTouched()
+      ])
+      on(inp, "change", #(e)[ bkChanged() ])
+    ]
+    box.appendChild(inp)
+    @(not(pal))[
+      {x} = bkMk("button", "bk-mini")
+      x.type = "button"
+      x.textContent = "×"
+      x.setAttribute("aria-label", "Remove input")
+      on(x, "mousedown", #(e)[ e.preventDefault() ])
+      on(x, "pointerdown", #(e)[
+        e.preventDefault()
+        removeAt(b.params, k)
+        bkChanged()
+      ])
+      box.appendChild(x)
+    ]
+    parent.appendChild(box)
+  ]
+  {plus} = bkMk("button", "bk-mini")
+  plus.type = "button"
+  plus.textContent = "+"
+  plus.setAttribute("aria-label", "Add an input")
+  @(not(pal))[
+    on(plus, "mousedown", #(e)[ e.preventDefault() ])
+    on(plus, "pointerdown", #(e)[
+      e.preventDefault()
+      bkAddParam(b)
+    ])
+  ]
+  parent.appendChild(plus)
+  // Says whether the function gives an answer (then it is a round block) or just does steps.
+  {rt} = bkMk("button", "bk-mini bk-ret")
+  rt.type = "button"
+  rt.textContent = "answer"
+  @(bkDefIsAnswer(b))[ rt.textContent = "answer ✓" ]
+  @(not(pal))[
+    on(rt, "mousedown", #(e)[ e.preventDefault() ])
+    on(rt, "pointerdown", #(e)[
+      e.preventDefault()
+      b.ret = not(bkDefIsAnswer(b))
+      bkChanged()
+    ])
+  ]
+  parent.appendChild(rt)
+]
+
+// Adds a new named input to a definition and puts the cursor in its name.
+#bkAddParam(b)[
+  @(not(has(b, "params")))[ b.params = list() ]
+  {n} = add(size(b.params), 1)
+  {nm} = join("input", n)
+  %(has(b.params, nm))[
+    n = add(n, 1)
+    nm = join("input", n)
+  ]
+  push(b.params, nm)
+  bkChanged()
+  later(30, #[
+    {els} = domAll(join("#bkWorld [data-id=", b.id, "] > .bk-head .bk-param"))
+    @(size(els))[
+      {el} = get(els, sub(size(els), 1))
+      el.focus()
+      el.select()
+    ]
+  ])
+]
+
+// A call block is the function's name, then one input for each input the function has. With no such function the
+// name is a box (so it can be fixed) and there is one free text.
+#bkCallEls(b, d, parent, pal)[
+  {def} = bkFnDefFor(bkWs, bkArgText(b, d, "name"))
+  @(def)[
+    {n} = bkMk("span", "bk-t")
+    n.textContent = bkArgText(b, d, "name")
+    parent.appendChild(n)
+    {ps} = bkParamsOf(def)
+    %(size(ps), i)[
+      {t} = bkMk("span", "bk-t")
+      t.textContent = get(ps, i)
+      parent.appendChild(t)
+      parent.appendChild(bkInputEl(b, d, join("p", i), pal))
+    ]
+  ][
+    {c} = bkMk("span", "bk-t")
+    c.textContent = "call"
+    parent.appendChild(c)
+    parent.appendChild(bkInputEl(b, d, "name", pal))
+    {t} = bkMk("span", "bk-t")
+    t.textContent = "with"
+    parent.appendChild(t)
+    parent.appendChild(bkInputEl(b, d, "args", pal))
+  ]
+]
+
+// The color of a block: functions take the color of the category they were put in.
+#bkBlockColor(b)[
+  {d} = bkKind(b.type)
+  {c} = bkColor(b.type)
+  @(d)[
+    @(d.hasParams)[ c = bkCatColorFor(bkDefCat(b)) ]
+    @(d.dynCall)[
+      {def} = bkFnDefFor(bkWs, bkArgText(b, d, "name"))
+      @(def)[ c = bkCatColorFor(bkDefCat(def)) ]
+    ]
+  ]
+  c
+]
+
+// Offers the names of the functions defined on this canvas when naming a call.
+#bkDefNames(blocks, out)[
+  %(blocks, b)[
+    @(eq(b.type, "fn_def"))[ push(out, bkDefName(b)) ]
+    %(b.slots, body)[ bkDefNames(body, out) ]
+  ]
+  out
+]
+
+#bkFnList[
+  @(bkFns)[
+    bkFns.innerHTML = ""
+    {names} = list()
+    %(bkWs.stacks, st)[ bkDefNames(st.blocks, names) ]
+    %(names, n)[
+      @(neq(n, ""))[
+        {o} = make("option")
+        o.value = n
+        bkFns.appendChild(o)
+      ]
+    ]
+    bkCatList.innerHTML = ""
+    %(bkCats, c)[
+      {o} = make("option")
+      o.value = c
+      bkCatList.appendChild(o)
     ]
   ]
 ]
@@ -245,7 +417,7 @@
   ]
   el.dataset.id = b.id
   el.dataset.type = b.type
-  el.style.setProperty("--c", bkColor(b.type))
+  el.style.setProperty("--c", bkBlockColor(b))
   el
 ]
 
@@ -290,6 +462,8 @@
     bkApplyView()
     bkMarkSel()
     bkMarkErr(true)
+    bkFnList()
+    bkSyncPal()
     bkRefreshHash()
   ]
 ]
@@ -298,7 +472,8 @@
 
 #bkCatHas(cat)[
   {any} = false
-  %(bkOrder, t)[ @(eq(get(bkReg, t).cat, cat))[ any = true ] ]
+  %(bkOrder, t)[ @(eq(get(bkReg, t).cat, cat))[ @(not(get(bkReg, t).hidden))[ any = true ] ] ]
+  %(bkFnDefs, df)[ @(eq(bkDefCat(df), cat))[ any = true ] ]
   any
 ]
 
@@ -327,8 +502,36 @@
   ]
   %(bkOrder, t)[
     @(eq(get(bkReg, t).cat, bkCat))[
-      bkPalItems.appendChild(bkBlockEl(bkMake(bkPalWs, t), true))
+      @(not(get(bkReg, t).hidden))[ bkPalItems.appendChild(bkBlockEl(bkMake(bkPalWs, t), true)) ]
     ]
+  ]
+  // Every function put in this category is a block here, like any other.
+  %(bkFnDefs, df)[
+    @(eq(bkDefCat(df), bkCat))[
+      {nm} = bkDefName(df)
+      {kind} = "fn_call"
+      @(bkDefIsAnswer(df))[ kind = "fn_value" ]
+      {cb} = bkMake(bkPalWs, kind)
+      {na} = map()
+      na.t = nm
+      put(cb.args, "name", na)
+      {el} = bkBlockEl(cb, true)
+      el.dataset.fn = nm
+      bkPalItems.appendChild(el)
+    ]
+  ]
+]
+
+// Draws the palette again when the functions have changed (new, renamed, moved to another category).
+#bkSyncPal[
+  bkFnDefs = bkAllDefs(bkWs)
+  {sig} = list()
+  %(bkFnDefs, df)[ push(sig, join(bkDefName(df), "|", bkDefCat(df), "|", joinList(bkParamsOf(df), ","), "|", bkDefIsAnswer(df))) ]
+  {s} = joinList(sig, ";")
+  @(neq(s, bkPalSig))[
+    bkPalSig = s
+    %(bkFnDefs, df)[ bkCatColorFor(bkDefCat(df)) ]
+    bkRenderPal()
   ]
 ]
 
@@ -578,8 +781,9 @@
 ]
 
 // Brings a new block in by tapping the palette: into the picked block if that fits, else onto the canvas middle.
-#bkTapAdd(type)[
+#bkTapAdd(type, fn)[
   {b} = bkMake(bkWs, type)
+  bkApplyFn(b, fn)
   {sel} = bkSelected()
   {done} = false
   @(bkIsValue(type))[
@@ -625,6 +829,15 @@
   ]
   bkSel = b.id
   bkChanged()
+]
+
+// A block from a function in the palette starts out calling that function.
+#bkApplyFn(b, fn)[
+  @(fn)[
+    {na} = map()
+    na.t = fn
+    put(b.args, "name", na)
+  ]
 ]
 
 // ---------- dragging ----------
@@ -778,9 +991,18 @@
 #bkLift(x, y)[
   {c} = bkCand
   bkCand = false
-  {r} = c.el.getBoundingClientRect()
+  {liveEl} = c.el
+  @(not(c.pal))[
+    {fresh} = dom(join("#bkWorld [data-id=", c.id, "]"))
+    @(fresh)[ liveEl = fresh ]
+  ]
+  {r} = liveEl.getBoundingClientRect()
   {moved} = list()
-  @(c.pal)[ moved = list(bkMake(bkWs, c.type)) ][ moved = bkCut(c.id) ]
+  @(c.pal)[
+    {nb} = bkMake(bkWs, c.type)
+    bkApplyFn(nb, c.fn)
+    moved = list(nb)
+  ][ moved = bkCut(c.id) ]
   @(size(moved))[
     {g} = map()
     g.moved = moved
@@ -895,7 +1117,7 @@
 
 // Pressing on the canvas: on a block it may become a drag or a tap, on empty space it moves the view.
 #bkDown(e)[
-  @(and(bkWs, eq(e.button, 0), not(e.target.closest(".bk-field"))))[
+  @(and(bkWs, eq(e.button, 0), not(e.target.closest(".bk-field, .bk-mini"))))[
     bkPtrSet(e, true)
     {a} = active()
     @(a)[ a.blur() ]
@@ -910,6 +1132,7 @@
         bkCand.id = bl.dataset.id
         bkCand.el = bl
         bkCand.pal = false
+        bkCand.fn = false
         bkCand.x = e.clientX
         bkCand.y = e.clientY
         // The stack touched comes to the front.
@@ -939,6 +1162,9 @@
       bkCand.type = bl.dataset.type
       bkCand.el = bl
       bkCand.pal = true
+      bkCand.fn = false
+      {fnn} = bl.dataset.fn
+      @(fnn)[ bkCand.fn = fnn ]
       bkCand.x = e.clientX
       bkCand.y = e.clientY
     ]
@@ -984,7 +1210,7 @@
         {c} = bkCand
         bkCand = false
         @(eq(e.type, "pointerup"))[
-          @(c.pal)[ bkTapAdd(c.type) ][
+          @(c.pal)[ bkTapAdd(c.type, c.fn) ][
             bkSel = c.id
             bkMarkSel()
           ]
@@ -1185,6 +1411,13 @@
     bkPal.appendChild(bkChips)
     bkPal.appendChild(bkPalItems)
     bkPane.appendChild(bkPal)
+
+    bkFns = make("datalist")
+    bkFns.id = "bkFns"
+    bkPane.appendChild(bkFns)
+    bkCatList = make("datalist")
+    bkCatList.id = "bkCatList"
+    bkPane.appendChild(bkCatList)
 
     bkInd = bkMk("div", "bk-ind")
     d.body.appendChild(bkInd)
