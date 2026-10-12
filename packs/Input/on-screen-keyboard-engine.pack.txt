@@ -1,0 +1,356 @@
+//@ pack On-Screen Keyboard (engine)
+//@ target engine
+// A full QWERTY keyboard drawn on the game screen, laid out like a phone keyboard. Touching a key presses that
+// key for the game, so keyDown("a") and keyPressed("space") work from a finger, and typed() and editText()
+// get the letters.
+//
+//   keyboard(on)       true shows it, false hides it, and "auto" (the starting setting) shows it only on touch screens
+//   keyboardShown()    is it showing right now?
+//   keyboardTop()      the y where the keyboard begins. On a tall phone screen that is the bottom of the game (it sits in
+//                      the room under the game). Where there is no room it covers the bottom of the game, so keep
+//                      anything important above this line.
+//
+// The keys: letters (shown in capitals while Shift is on), then Shift, Backspace, "123" (digits and punctuation,
+// Esc, Tab and Ctrl) and "abc" (back to letters), Space, the four arrow keys, and Enter. Tap Shift once for the next
+// key only, tap it twice quickly for caps lock, and tap it again to turn it off. While Shift is on, keyDown("shift")
+// is true. Holding a key keeps it held, and several fingers can hold several keys.
+//
+// To change how it looks, change these variables (any CSS color):
+//   oskBack  oskFillKey  oskFillSpecial  oskFillDown  oskText
+//
+// Games for phones should call keyboard(false) in #init if they do not need keys, and use touching() or touches() instead.
+// Taps on the keyboard also count as touches for the game.
+//
+// Dependencies: Keyboard Input (engine).
+// This pack replaces kbHookInput and kbHookDraw, which Keyboard Input leaves empty on purpose. Other packs that
+// replace those two hooks will clash with it.
+
+{oskMode} = "auto"
+{oskPage} = "abc"
+{oskShift} = false
+{oskCaps} = false
+{oskDrop} = false
+{oskShiftT} = 99
+{oskKeys} = list()
+{oskSig} = ""
+{oskBox} = map()
+{oskDown} = map()
+{oskShifted} = map()
+{oskBack} = "#0a1d26"
+{oskFillKey} = "rgba(255, 255, 255, 0.16)"
+{oskFillSpecial} = "rgba(255, 255, 255, 0.08)"
+{oskFillDown} = "rgba(255, 255, 255, 0.42)"
+{oskText} = "rgba(255, 255, 255, 0.9)"
+
+// ---------- showing and hiding ----------
+
+#keyboard(on)[
+  @(eq(on, "auto"))[ oskMode = "auto" ][
+    @(on)[ oskMode = "on" ][ oskMode = "off" ]
+  ]
+  true
+]
+
+#keyboardShown[
+  {shown} = false
+  @(eq(oskMode, "on"))[ shown = true ][
+    @(eq(oskMode, "auto"))[ shown = isTouch() ]
+  ]
+  shown
+]
+
+#keyboardTop[
+  {top} = screenHeight()
+  @(keyboardShown())[
+    @(eq(padSpace(), 0))[
+      oskLayout()
+      top = oskBox.y
+    ]
+  ]
+  top
+]
+
+// ---------- the keys ----------
+
+// One key. id is what the finger tracking uses, and kind is "key", "shift" or "page".
+#oskKey(name, label, units, kind)[
+  {k} = map()
+  k.name = name
+  k.id = name
+  k.label = label
+  k.units = units
+  k.kind = kind
+  k.x = 0
+  k.y = 0
+  k.pw = 0
+  k.ph = 0
+  @(neq(kind, "key"))[ k.id = join("~", kind) ]
+  k
+]
+
+#oskFrom(names)[
+  {row} = list()
+  %(names, n)[ push(row, oskKey(n, "", 1, "key")) ]
+  row
+]
+
+#oskChars(t)[
+  {out} = list()
+  %(size(t), i)[ push(out, slice(t, i, add(i, 1))) ]
+  out
+]
+
+// The rows of keys on a page, as lists of keys.
+#oskRows(page)[
+  {rows} = list()
+  @(eq(page, "123"))[
+    push(rows, oskFrom(oskChars("1234567890")))
+    push(rows, oskFrom(list("-", "=", "[", "]", ";", "'", ",", ".", "/", "\\")))
+    push(rows, list(
+      oskKey("shift", "", 1.5, "shift"),
+      oskKey("escape", "esc", 2.25, "key"),
+      oskKey("tab", "tab", 2.25, "key"),
+      oskKey("ctrl", "ctrl", 2.5, "key"),
+      oskKey("backspace", "⌫", 1.5, "key")
+    ))
+  ][
+    push(rows, oskFrom(oskChars("qwertyuiop")))
+    push(rows, oskFrom(oskChars("asdfghjkl")))
+    {third} = list(oskKey("shift", "", 1.5, "shift"))
+    %(oskChars("zxcvbnm"), c)[ push(third, oskKey(c, "", 1, "key")) ]
+    push(third, oskKey("backspace", "⌫", 1.5, "key"))
+    push(rows, third)
+  ]
+  {pageLabel} = "123"
+  @(eq(page, "123"))[ pageLabel = "abc" ]
+  push(rows, list(
+    oskKey("page", pageLabel, 1.5, "page"),
+    oskKey("space", "space", 3, "key"),
+    oskKey("left", "◀", 1, "key"),
+    oskKey("up", "▲", 1, "key"),
+    oskKey("down", "▼", 1, "key"),
+    oskKey("right", "▶", 1, "key"),
+    oskKey("enter", "↵", 1.5, "key")
+  ))
+  rows
+]
+
+// Works out where every key is. It only redoes the work when the screen size or the page changes.
+#oskLayout[
+  {w} = screenWidth()
+  {h} = screenHeight()
+  {sp} = padSpace()
+  {sig} = join(w, "x", h, "x", sp, "x", oskPage)
+  @(neq(sig, oskSig))[
+    oskSig = sig
+    {pad} = 3
+    {u} = div(sub(w, mul(2, pad)), 10)
+    {full} = sp
+    @(eq(sp, 0))[ full = round(mul(h, 0.5)) ]
+    {bh} = min(full, round(add(mul(u, 6), mul(2, pad))))
+    // Under the game the keys sit right below it, in the room there. Otherwise they cover the bottom of the game.
+    {keyTop} = h
+    oskBox.y = h
+    oskBox.h = sp
+    @(eq(sp, 0))[
+      keyTop = sub(h, bh)
+      oskBox.y = keyTop
+      oskBox.h = bh
+    ]
+    {rows} = oskRows(oskPage)
+    {rowH} = div(sub(bh, mul(2, pad)), size(rows))
+    {keys} = list()
+    %(size(rows), r)[
+      {row} = get(rows, r)
+      {total} = 0
+      %(row, k)[ total = add(total, k.units) ]
+      {x} = add(pad, mul(u, div(sub(10, total), 2)))
+      %(row, k)[
+        k.x = x
+        k.y = add(add(keyTop, pad), mul(r, rowH))
+        k.pw = mul(u, k.units)
+        k.ph = rowH
+        x = add(x, k.pw)
+        push(keys, k)
+      ]
+    ]
+    oskKeys = keys
+  ]
+  true
+]
+
+#oskInside(k, x, y)[
+  and(gte(x, k.x), lt(x, add(k.x, k.pw)), gte(y, k.y), lt(y, add(k.y, k.ph)))
+]
+
+// ---------- what a key types ----------
+
+{oskLetters} = "abcdefghijklmnopqrstuvwxyz"
+
+#oskChar(name)[
+  {ch} = ""
+  @(eq(size(name), 1))[
+    @(has(oskLetters, name))[
+      @(or(oskShift, oskCaps))[ ch = upper(name) ][ ch = name ]
+    ][
+      ch = name
+      @(and(oskShift, has(oskShifted, name)))[ ch = get(oskShifted, name) ]
+    ]
+  ]
+  @(eq(name, "space"))[ ch = " " ]
+  ch
+]
+
+#oskLabel(k)[
+  {l} = k.label
+  @(eq(k.kind, "shift"))[
+    l = "⇧"
+    @(oskCaps)[ l = "⇪" ]
+  ]
+  @(eq(l, ""))[
+    l = k.name
+    @(has(oskLetters, k.name))[
+      @(or(oskShift, oskCaps))[ l = upper(k.name) ]
+    ][
+      @(and(oskShift, has(oskShifted, k.name)))[ l = get(oskShifted, k.name) ]
+    ]
+  ]
+  l
+]
+
+// ---------- fingers ----------
+
+#oskTapShift[
+  @(oskCaps)[
+    oskCaps = false
+    oskShift = false
+  ][
+    @(and(oskShift, lt(oskShiftT, 20)))[ oskCaps = true ][ oskShift = not(oskShift) ]
+  ]
+  oskShiftT = 0
+]
+
+// A finger just landed on this key.
+#oskPressed(k)[
+  @(eq(k.kind, "shift"))[ oskTapShift() ]
+  @(eq(k.kind, "page"))[
+    @(eq(oskPage, "abc"))[ oskPage = "123" ][ oskPage = "abc" ]
+  ]
+  @(eq(k.kind, "key"))[
+    kbBufText = join(kbBufText, oskChar(k.name))
+    // One-time Shift turns off after the next key. It lets go a frame later so the game sees both together.
+    @(and(oskShift, not(oskCaps)))[ oskDrop = true ]
+  ]
+]
+
+// A finger lifted off this key (or the key went away).
+#oskReleased(id)[
+  @(neq(slice(id, 0, 1), "~"))[ kbVirtual(id, false) ]
+]
+
+#oskReleaseAll[
+  %(keys(oskDown), id)[
+    @(kbOn(oskDown, id))[
+      oskReleased(id)
+      put(oskDown, id, false)
+    ]
+  ]
+]
+
+// Runs at the start of every frame.
+#oskInput[
+  oskShiftT = add(oskShiftT, 1)
+  @(oskDrop)[
+    oskShift = false
+    oskDrop = false
+  ]
+  {shown} = keyboardShown()
+  usePadSpace(shown)
+  @(shown)[
+    oskLayout()
+    {fingers} = touches()
+    {now} = map()
+    %(oskKeys, k)[
+      {on} = false
+      %(fingers, t)[ @(oskInside(k, t.x, t.y))[ on = true ] ]
+      @(on)[ put(now, k.id, k) ]
+    ]
+    %(keys(now), id)[
+      @(not(kbOn(oskDown, id)))[ oskPressed(get(now, id)) ]
+    ]
+    %(keys(oskDown), id)[
+      @(and(kbOn(oskDown, id), not(has(now, id))))[
+        oskReleased(id)
+        put(oskDown, id, false)
+      ]
+    ]
+    %(keys(now), id)[
+      {held} = get(now, id)
+      put(oskDown, id, true)
+      @(eq(held.kind, "key"))[ kbVirtual(id, true) ]
+    ]
+  ][ oskReleaseAll() ]
+  kbVirtual("shift", or(oskShift, oskCaps))
+  true
+]
+
+// ---------- drawing ----------
+
+#oskLit(k)[
+  {lit} = kbOn(oskDown, k.id)
+  @(and(eq(k.kind, "shift"), or(oskShift, oskCaps)))[ lit = true ]
+  lit
+]
+
+// Runs at the end of every frame, on top of everything else.
+#oskDraw[
+  @(keyboardShown())[
+    oskLayout()
+    drawRect(0, oskBox.y, screenWidth(), oskBox.h, oskBack)
+    %(oskKeys, k)[
+      {fill} = oskFillKey
+      @(or(neq(k.kind, "key"), gt(size(k.label), 0)))[ fill = oskFillSpecial ]
+      @(oskLit(k))[ fill = oskFillDown ]
+      drawRect(add(k.x, 1), add(k.y, 1), sub(k.pw, 2), sub(k.ph, 2), fill)
+      {label} = oskLabel(k)
+      {fs} = min(div(k.ph, 2.1), div(k.pw, 1.8))
+      @(gt(size(label), 1))[ fs = mul(fs, 0.7) ]
+      @(or(eq(label, "⌫"), eq(label, "↵")))[ fs = div(k.ph, 2.1) ]
+      @(or(eq(k.name, "left"), eq(k.name, "right"), eq(k.name, "up"), eq(k.name, "down")))[ fs = div(k.ph, 2.6) ]
+      drawCenteredText(label, add(k.x, div(k.pw, 2)), add(k.y, div(k.ph, 2)), oskText, fs)
+    ]
+  ]
+  true
+]
+
+// ---------- plugging into Keyboard Input ----------
+
+#kbHookInput[ oskInput() ]
+
+#kbHookDraw[ oskDraw() ]
+
+#oskSetup[
+  put(oskShifted, "1", "!")
+  put(oskShifted, "2", "@")
+  put(oskShifted, "3", "#")
+  put(oskShifted, "4", "$")
+  put(oskShifted, "5", "%")
+  put(oskShifted, "6", "^")
+  put(oskShifted, "7", "&")
+  put(oskShifted, "8", "*")
+  put(oskShifted, "9", "(")
+  put(oskShifted, "0", ")")
+  put(oskShifted, "-", "_")
+  put(oskShifted, "=", "+")
+  put(oskShifted, "[", "{")
+  put(oskShifted, "]", "}")
+  put(oskShifted, ";", ":")
+  put(oskShifted, "'", "\"")
+  put(oskShifted, ",", "<")
+  put(oskShifted, ".", ">")
+  put(oskShifted, "/", "?")
+  put(oskShifted, "\\", "|")
+  true
+]
+
+{oskReady} = oskSetup()

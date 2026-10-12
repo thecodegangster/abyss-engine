@@ -1,0 +1,318 @@
+//@ pack Keyboard Input (engine)
+//@ target engine
+// Makes keys mean keys. keyDown("a") is true while the A key is held, not a controller's A button, and
+// the phone gamepad (and its pad buttons) is gone. Arrow keys keep their names, and W A S D are plain
+// letters now, so they no longer count as the arrows.
+//
+// Key names are lowercase text:  "a" to "z", "0" to "9", "space", "enter", "escape", "tab", "backspace",
+// "left" "right" "up" "down" (the arrow keys), "shift", "ctrl", "alt", "meta", "f1" to "f12", and the
+// punctuation keys written as themselves: "-" "=" "[" "]" ";" "'" "," "." "/" "\" and "`".
+// Keys are named by the key itself, so holding Shift while pressing 1 is "shift" and "1", not "!".
+//
+//   keyDown(name)      true while the key is held
+//   keyPressed(name)   true only on the frame the key goes down (even for a very quick tap)
+//   keyReleased(name)  true only on the frame the key comes up
+//   keyRepeat(name)    true when the key goes down, then again and again while it is held, like typing
+//   anyKeyDown()  anyKeyPressed()   is any key held? did any key just go down?
+//   lastKey()          the name of the key that went down most recently ("" if none yet)
+//   typed()            the characters typed during this frame, as text ("" if none). Shift is applied: "A", "!".
+//   editText(t, max)   gives t with this frame's typing added and Backspace applied. Stops at max characters.
+//   press(name, on)    makes a key count as held or released, so other code can press keys for the player
+//
+// Use these in #update. Like the old buttons, they are read once per frame. The on-screen keyboard from the
+// On-Screen Keyboard pack feeds the same functions, so a game that works with a keyboard works on a phone.
+//
+// How it works: it listens for key events on the page itself and keeps its own list of held keys. It runs its
+// once-a-frame bookkeeping from padInput(), which the engine's #frame already calls first on every frame.
+// padDraw(), called last, runs kbHookDraw(). Other packs plug in by replacing the two hooks at the bottom.
+//
+// Dependencies: none.
+// This pack replaces keyDown, keyPressed and press (they are built into Abyss Engine, so this version is
+// used by the engine and the game), plus these engine functions: gamepad, padButton, padButtons,
+// padVisible, padInput and padDraw. The old gamepad does nothing now: gamepad() can still be called, so
+// older games do not break. Other packs that replace those functions will clash with it.
+// The old button names "a", "b" and "start" are gone. "a" and "b" are the A and B keys, and Enter is "enter".
+
+{kbHeld} = map()
+{kbVirt} = map()
+{kbBufHit} = map()
+{kbBufUp} = map()
+{kbBufText} = ""
+{kbHit} = map()
+{kbUp} = map()
+{kbText} = ""
+{kbAge} = map()
+{kbLast} = ""
+{kbNames} = map()
+{kbModifiers} = list("shift", "ctrl", "alt", "meta")
+{kbBlockDefault} = list("left", "right", "up", "down", "space")
+{kbRepeatDelay} = 24
+{kbRepeatEvery} = 3
+
+// ---------- reading keys ----------
+
+// A key name, tidied: lowercase, and " " means "space".
+#kbKey(n)[
+  {k} = lower(text(n))
+  @(eq(k, " "))[ k = "space" ]
+  k
+]
+
+// Is this key true in one of the held lists?
+#kbOn(m, n)[
+  {on} = false
+  @(has(m, n))[ on = get(m, n) ]
+  on
+]
+
+#keyDown(name)[
+  {k} = kbKey(name)
+  or(kbOn(kbHeld, k), kbOn(kbVirt, k))
+]
+
+#keyPressed(name)[ has(kbHit, kbKey(name)) ]
+
+#keyReleased(name)[ has(kbUp, kbKey(name)) ]
+
+// True when the key goes down, and again and again while it is held down for a moment.
+#keyRepeat(name)[
+  {k} = kbKey(name)
+  {r} = has(kbHit, k)
+  @(not(r))[
+    @(has(kbAge, k))[
+      {a} = get(kbAge, k)
+      @(and(gt(a, kbRepeatDelay), eq(mod(sub(a, kbRepeatDelay), kbRepeatEvery), 0)))[ r = true ]
+    ]
+  ]
+  r
+]
+
+#anyKeyDown[
+  {any} = false
+  %(keys(kbHeld), k)[ @(kbOn(kbHeld, k))[ any = true ] ]
+  %(keys(kbVirt), k)[ @(kbOn(kbVirt, k))[ any = true ] ]
+  any
+]
+
+#anyKeyPressed[ gt(size(keys(kbHit)), 0) ]
+
+#lastKey[ kbLast ]
+
+#typed[ kbText ]
+
+// Text with this frame's typing added and Backspace applied. Call it once a frame.
+#editText(t, maxLen)[
+  {out} = text(t)
+  @(not(maxLen))[ maxLen = 40 ]
+  @(keyRepeat("backspace"))[ out = slice(out, 0, max(0, sub(size(out), 1))) ]
+  {fresh} = typed()
+  {room} = sub(maxLen, size(out))
+  @(and(gt(size(fresh), 0), gt(room, 0)))[ out = join(out, slice(fresh, 0, min(room, size(fresh)))) ]
+  out
+]
+
+// ---------- changing keys (used by the page listeners and by other packs) ----------
+
+#kbKeyDown(name)[
+  @(not(kbOn(kbHeld, name)))[ put(kbBufHit, name, true) ]
+  put(kbHeld, name, true)
+  kbLast = name
+]
+
+#kbKeyUp(name)[
+  @(kbOn(kbHeld, name))[ put(kbBufUp, name, true) ]
+  put(kbHeld, name, false)
+]
+
+// A key held by something other than the keyboard, like a finger on the on-screen keyboard.
+#kbVirtual(name, on)[
+  {state} = not(not(on))
+  @(state)[
+    @(not(kbOn(kbVirt, name)))[
+      put(kbBufHit, name, true)
+      kbLast = name
+    ]
+  ][
+    @(kbOn(kbVirt, name))[ put(kbBufUp, name, true) ]
+  ]
+  put(kbVirt, name, state)
+]
+
+#press(name, on)[
+  kbVirtual(kbKey(name), on)
+  true
+]
+
+#kbReleaseAll[
+  %(keys(kbHeld), k)[ kbKeyUp(k) ]
+  true
+]
+
+// ---------- the once-a-frame step ----------
+
+#kbBump(k)[
+  {a} = 0
+  @(has(kbAge, k))[ a = get(kbAge, k) ]
+  put(kbAge, k, add(a, 1))
+]
+
+// How many frames each key has been down (for keyRepeat).
+#kbCountAges[
+  %(keys(kbAge), k)[
+    @(not(or(kbOn(kbHeld, k), kbOn(kbVirt, k))))[ put(kbAge, k, 0) ]
+  ]
+  %(keys(kbHeld), k)[ @(kbOn(kbHeld, k))[ kbBump(k) ] ]
+  %(keys(kbVirt), k)[ @(and(kbOn(kbVirt, k), not(kbOn(kbHeld, k))))[ kbBump(k) ] ]
+]
+
+// Runs first on every frame. Things that happened since the last frame become "this frame's" keys.
+#kbBeginFrame[
+  kbHookInput()
+  kbHit = kbBufHit
+  kbBufHit = map()
+  kbUp = kbBufUp
+  kbBufUp = map()
+  kbText = kbBufText
+  kbBufText = ""
+  kbCountAges()
+  true
+]
+
+// Other packs replace these two. The first runs at the start of every frame, the second at the end of it.
+#kbHookInput[ true ]
+
+#kbHookDraw[ true ]
+
+// ---------- the engine's pad functions, now the keyboard's ----------
+
+#gamepad(on)[ true ]
+
+#padButton(name, label, x, y, r)[ false ]
+
+#padButtons[ list() ]
+
+#padVisible[ false ]
+
+#padInput[ kbBeginFrame() ]
+
+#padDraw[ kbHookDraw() ]
+
+// ---------- listening to the page ----------
+
+// The name of a key from the browser's key event. The physical key is used (so Shift never changes it),
+// and the typed character is the fallback.
+#kbName(code, key)[
+  {n} = ""
+  @(gt(size(code), 0))[
+    @(has(kbNames, code))[ n = get(kbNames, code) ][
+      @(and(eq(size(code), 4), eq(slice(code, 0, 3), "Key")))[ n = lower(slice(code, 3, 4)) ][
+        @(and(eq(size(code), 6), eq(slice(code, 0, 5), "Digit")))[ n = slice(code, 5, 6) ][ n = lower(code) ]
+      ]
+    ]
+  ][
+    n = lower(key)
+    @(eq(n, " "))[ n = "space" ]
+  ]
+  n
+]
+
+// Typing in the code editor or a text box should not play the game.
+#kbIgnore(e)[
+  {tag} = ""
+  {t} = e.target
+  @(t)[ @(t.tagName)[ tag = upper(t.tagName) ] ]
+  {skip} = or(eq(tag, "TEXTAREA"), eq(tag, "INPUT"), eq(tag, "SELECT"))
+  @(and(eq(tag, "BUTTON"), or(eq(e.key, "Enter"), eq(e.key, " "))))[ skip = true ]
+  skip
+]
+
+#kbEventName(e)[
+  {code} = ""
+  {key} = ""
+  @(e.code)[ code = e.code ]
+  @(e.key)[ key = e.key ]
+  kbName(code, key)
+]
+
+#kbOnDown(e)[
+  @(not(kbIgnore(e)))[
+    {name} = kbEventName(e)
+    {combo} = or(e.ctrlKey, e.metaKey, e.altKey)
+    // Shortcuts like Ctrl+R are left to the browser, but Shift, Ctrl and Alt count as keys on their own.
+    @(or(has(kbModifiers, name), not(combo)))[
+      kbKeyDown(name)
+      {ch} = ""
+      @(e.key)[ ch = e.key ]
+      @(and(eq(size(ch), 1), not(combo)))[ kbBufText = join(kbBufText, ch) ]
+      @(has(kbBlockDefault, name))[ e.preventDefault() ]
+    ]
+  ]
+  true
+]
+
+#kbOnUp(e)[
+  kbKeyUp(kbEventName(e))
+  true
+]
+
+#kbOnBlur(e)[
+  kbReleaseAll()
+  true
+]
+
+// Starts listening. Each Run of the game would add another listener, so the one from the last Run is removed first.
+#kbInstall[
+  {w} = doc().defaultView
+  @(w.abyssKb)[
+    w.removeEventListener("keydown", w.abyssKb.down)
+    w.removeEventListener("keyup", w.abyssKb.up)
+    w.removeEventListener("blur", w.abyssKb.blur)
+  ]
+  {h} = map()
+  h.down = #(e)[ kbOnDown(e) ]
+  h.up = #(e)[ kbOnUp(e) ]
+  h.blur = #(e)[ kbOnBlur(e) ]
+  w.abyssKb = h
+  on(w, "keydown", h.down)
+  on(w, "keyup", h.up)
+  on(w, "blur", h.blur)
+  true
+]
+
+#kbSetup[
+  usePadSpace(false)
+  put(kbNames, "ArrowLeft", "left")
+  put(kbNames, "ArrowRight", "right")
+  put(kbNames, "ArrowUp", "up")
+  put(kbNames, "ArrowDown", "down")
+  put(kbNames, "Space", "space")
+  put(kbNames, "Enter", "enter")
+  put(kbNames, "NumpadEnter", "enter")
+  put(kbNames, "Escape", "escape")
+  put(kbNames, "Backspace", "backspace")
+  put(kbNames, "Tab", "tab")
+  put(kbNames, "ShiftLeft", "shift")
+  put(kbNames, "ShiftRight", "shift")
+  put(kbNames, "ControlLeft", "ctrl")
+  put(kbNames, "ControlRight", "ctrl")
+  put(kbNames, "AltLeft", "alt")
+  put(kbNames, "AltRight", "alt")
+  put(kbNames, "MetaLeft", "meta")
+  put(kbNames, "MetaRight", "meta")
+  put(kbNames, "CapsLock", "capslock")
+  put(kbNames, "Minus", "-")
+  put(kbNames, "Equal", "=")
+  put(kbNames, "BracketLeft", "[")
+  put(kbNames, "BracketRight", "]")
+  put(kbNames, "Semicolon", ";")
+  put(kbNames, "Quote", "'")
+  put(kbNames, "Comma", ",")
+  put(kbNames, "Period", ".")
+  put(kbNames, "Slash", "/")
+  put(kbNames, "Backslash", "\\")
+  put(kbNames, "Backquote", "`")
+  kbInstall()
+  true
+]
+
+{kbReady} = kbSetup()
