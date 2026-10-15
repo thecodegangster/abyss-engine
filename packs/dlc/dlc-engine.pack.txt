@@ -1,0 +1,411 @@
+//@ pack DLC (engine)
+//@ target engine
+// Lets a finished game take downloadable content (DLC): extra sprites and data in one signed file that a
+// player installs. The game's maker signs each DLC file with a secret key that only they hold, and the game
+// holds the matching public key, so a file that was edited, or made by anyone else, is turned away.
+// There is one key for the whole game. It never changes. (Make it, and the DLC files, with "DLC Maker (UI)".)
+//
+// Set it up in your game code (the Maker's DLC tab writes this tab for you):
+//
+//   {DLC_GAME} = "lantern-night"        a name for your game. A DLC file only works in the game it was made for
+//   {DLC_KEY} = "ab12...ef"             the game's public key (64 letters and numbers)
+//
+// Functions for your game code:
+//
+//   dlcInstall(done)           opens a file picker. When the player has chosen, done(res) runs
+//                              (call it from a tap or key press so the browser lets the picker open)
+//   dlcInstallText(text)       the same, from text you already have (a paste box). Gives res
+//       res.ok      true if the DLC was installed
+//       res.id      the DLC's id when it was installed
+//       res.error   in plain words why not, when ok is false
+//   dlcHas(id)                 is this DLC installed (and its signature good)?
+//   dlcList()                  the ids of every installed DLC
+//   dlcInfo(id)                a map with id, name and version, or false
+//   dlcItems(id)               everything the DLC carries (a map with sprites and data), or false
+//   dlcData(id, key)           one value from the DLC's data, or false
+//   dlcRemove(id)              uninstalls it (its sprites stay available until the game is started again)
+//   dlcRejected()              a map of id to why for DLC that is saved but no longer passes the check
+//   dlcReady()                 true if the game has a DLC id and key
+//
+// Installed DLC is kept in the browser's saved data and checked again every time the game starts.
+// Sprites in a DLC are made available at start-up with the "DLC Sprites (engine)" pack. A DLC sprite with
+// the same name as one in the game replaces it.
+//
+// Limit: everything here runs on the player's computer, so someone who edits their own copy of the game
+// can skip the check. It keeps honest players honest and stops edited or forged files, but it is not copy
+// protection.
+//
+// Dependencies: none. (To put a DLC's sprites in the game, add "DLC Sprites (engine)", which needs
+// "Sprites (engine)".) "DLC Maker (UI)" depends on this pack.
+// This pack only adds things. It does not replace any of Abyss Engine's own functions.
+// Every name it adds starts with dlc or DLC.
+
+{DLC_FORMAT} = 1
+{dlcApiObj} = false
+{dlcLoaded} = false
+{dlcMap} = map()
+{dlcWhy} = map()
+
+// ---------- the signing code ----------
+// A small piece of JavaScript (Ed25519 signatures, and a file picker). It is the same text in the
+// "DLC Maker (UI)" pack. Hash can't do this much arithmetic quickly, and a pack can't carry kernel changes.
+#dlcJs[
+  {r} = list()
+  push(r, "var P = (1n << 255n) - 19n;")
+  push(r, "var L = (1n << 252n) + 27742317777372353535851937790883648493n;")
+  push(r, "var M64 = (1n << 64n) - 1n;")
+  push(r, "function md(a, m) { var r = a % (m || P); return r >= 0n ? r : r + (m || P); }")
+  push(r, "function pw(b, e, m) { var r = 1n; b = md(b, m); while (e > 0n) { if (e & 1n) r = md(r * b, m); b = md(b * b, m); e >>= 1n; } return r; }")
+  push(r, "function inv(a) { return pw(a, P - 2n); }")
+  push(r, "var D = md(-121665n * inv(121666n));")
+  push(r, "var SQRTM1 = pw(2n, (P - 1n) / 4n);")
+  push(r, "function root(n, k) {")
+  push(r, "  var x = 1n << (BigInt(n.toString(2).length) / k + 1n);")
+  push(r, "  for (;;) { var y = ((k - 1n) * x + n / (x ** (k - 1n))) / k; if (y >= x) return x; x = y; }")
+  push(r, "}")
+  push(r, "var primes = [];")
+  push(r, "for (var c = 2; primes.length < 80; c++) { var ok = true; for (var i = 0; i < primes.length; i++) if (c % primes[i] === 0) ok = false; if (ok) primes.push(c); }")
+  push(r, "var K = primes.map(function (p) { return root(BigInt(p) << 192n, 3n) & M64; });")
+  push(r, "var H0 = primes.slice(0, 8).map(function (p) { return root(BigInt(p) << 128n, 2n) & M64; });")
+  push(r, "function rotr(x, n) { return ((x >> n) | (x << (64n - n))) & M64; }")
+  push(r, "function sha512(m) {")
+  push(r, "  var H = H0.slice(), len = m.length, padLen = ((len + 17 + 127) >> 7) << 7, b = new Uint8Array(padLen);")
+  push(r, "  b.set(m); b[len] = 128;")
+  push(r, "  var bits = BigInt(len) * 8n;")
+  push(r, "  for (var i = 0; i < 16; i++) b[padLen - 1 - i] = Number((bits >> BigInt(8 * i)) & 255n);")
+  push(r, "  for (var off = 0; off < padLen; off += 128) {")
+  push(r, "    var W = [], i, j;")
+  push(r, "    for (i = 0; i < 16; i++) { var w = 0n; for (j = 0; j < 8; j++) w = (w << 8n) | BigInt(b[off + i * 8 + j]); W.push(w); }")
+  push(r, "    for (i = 16; i < 80; i++) {")
+  push(r, "      var a15 = W[i - 15], a2 = W[i - 2];")
+  push(r, "      var s0 = rotr(a15, 1n) ^ rotr(a15, 8n) ^ (a15 >> 7n), s1 = rotr(a2, 19n) ^ rotr(a2, 61n) ^ (a2 >> 6n);")
+  push(r, "      W.push((W[i - 16] + s0 + W[i - 7] + s1) & M64);")
+  push(r, "    }")
+  push(r, "    var a = H[0], bb = H[1], cc = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];")
+  push(r, "    for (i = 0; i < 80; i++) {")
+  push(r, "      var S1 = rotr(e, 14n) ^ rotr(e, 18n) ^ rotr(e, 41n), ch = ((e & f) ^ (~e & g)) & M64;")
+  push(r, "      var t1 = (h + S1 + ch + K[i] + W[i]) & M64;")
+  push(r, "      var S0 = rotr(a, 28n) ^ rotr(a, 34n) ^ rotr(a, 39n), mj = (a & bb) ^ (a & cc) ^ (bb & cc);")
+  push(r, "      var t2 = (S0 + mj) & M64;")
+  push(r, "      h = g; g = f; f = e; e = (d + t1) & M64; d = cc; cc = bb; bb = a; a = (t1 + t2) & M64;")
+  push(r, "    }")
+  push(r, "    var v = [a, bb, cc, d, e, f, g, h];")
+  push(r, "    for (i = 0; i < 8; i++) H[i] = (H[i] + v[i]) & M64;")
+  push(r, "  }")
+  push(r, "  var out = new Uint8Array(64);")
+  push(r, "  for (var k = 0; k < 8; k++) for (var q = 0; q < 8; q++) out[k * 8 + q] = Number((H[k] >> BigInt(56 - 8 * q)) & 255n);")
+  push(r, "  return out;")
+  push(r, "}")
+  push(r, "function cat() { var n = 0, i; for (i = 0; i < arguments.length; i++) n += arguments[i].length; var o = new Uint8Array(n), p = 0; for (i = 0; i < arguments.length; i++) { o.set(arguments[i], p); p += arguments[i].length; } return o; }")
+  push(r, "function toInt(b) { var r = 0n; for (var i = b.length - 1; i >= 0; i--) r = (r << 8n) | BigInt(b[i]); return r; }")
+  push(r, "function toBytes(n, len) { var o = new Uint8Array(len); for (var i = 0; i < len; i++) { o[i] = Number(n & 255n); n >>= 8n; } return o; }")
+  push(r, "function padd(p, q) {")
+  push(r, "  var A = md((p[1] - p[0]) * (q[1] - q[0])), B = md((p[1] + p[0]) * (q[1] + q[0])), C = md(2n * p[3] * q[3] * D), Dd = md(2n * p[2] * q[2]);")
+  push(r, "  var E = B - A, F = Dd - C, G = Dd + C, Hh = B + A;")
+  push(r, "  return [md(E * F), md(G * Hh), md(F * G), md(E * Hh)];")
+  push(r, "}")
+  push(r, "function pmul(s, p) { var q = [0n, 1n, 1n, 0n]; while (s > 0n) { if (s & 1n) q = padd(q, p); p = padd(p, p); s >>= 1n; } return q; }")
+  push(r, "function penc(p) { var zi = inv(p[2]), x = md(p[0] * zi), y = md(p[1] * zi); return toBytes(y | ((x & 1n) << 255n), 32); }")
+  push(r, "function pdec(b) {")
+  push(r, "  var n = toInt(b), sign = n >> 255n, y = n & ((1n << 255n) - 1n);")
+  push(r, "  if (y >= P) return null;")
+  push(r, "  var y2 = md(y * y), x2 = md((y2 - 1n) * inv(D * y2 + 1n)), x = pw(x2, (P + 3n) / 8n);")
+  push(r, "  if (md(x * x - x2) !== 0n) x = md(x * SQRTM1);")
+  push(r, "  if (md(x * x - x2) !== 0n) return null;")
+  push(r, "  if (x === 0n && sign === 1n) return null;")
+  push(r, "  if ((x & 1n) !== sign) x = P - x;")
+  push(r, "  return [x, y, 1n, md(x * y)];")
+  push(r, "}")
+  push(r, "function peq(p, q) { return md(p[0] * q[2] - q[0] * p[2]) === 0n && md(p[1] * q[2] - q[1] * p[2]) === 0n; }")
+  push(r, "var GY = md(4n * inv(5n)), GX = pdec(toBytes(GY, 32))[0];")
+  push(r, "var G = [GX, GY, 1n, md(GX * GY)];")
+  push(r, "function hex(b) { var s = ''; for (var i = 0; i < b.length; i++) s += (b[i] < 16 ? '0' : '') + b[i].toString(16); return s; }")
+  push(r, "function unhex(s, len) {")
+  push(r, "  s = String(s);")
+  push(r, "  if (s.length !== len * 2) return null;")
+  push(r, "  var o = new Uint8Array(len);")
+  push(r, "  for (var i = 0; i < len; i++) { var v = parseInt(s.substr(i * 2, 2), 16); if (isNaN(v) || !/^[0-9a-fA-F]{2}$/.test(s.substr(i * 2, 2))) return null; o[i] = v; }")
+  push(r, "  return o;")
+  push(r, "}")
+  push(r, "function utf8(s) { return new TextEncoder().encode(String(s)); }")
+  push(r, "function secret(seed) { var h = sha512(seed), a = toInt(h.slice(0, 32)); a &= (1n << 254n) - 8n; a |= 1n << 254n; return { a: a, prefix: h.slice(32) }; }")
+  push(r, "var api = {};")
+  push(r, "api.keypair = function () {")
+  push(r, "  var seed = new Uint8Array(32); crypto.getRandomValues(seed);")
+  push(r, "  return { secret: hex(seed), pub: api.pub(hex(seed)) };")
+  push(r, "};")
+  push(r, "api.pub = function (seedHex) { var s = unhex(seedHex, 32); if (!s) return false; return hex(penc(pmul(secret(s).a, G))); };")
+  push(r, "api.sign = function (seedHex, msg) {")
+  push(r, "  var s = unhex(seedHex, 32); if (!s) return false;")
+  push(r, "  var k = secret(s), A = penc(pmul(k.a, G)), m = utf8(msg);")
+  push(r, "  var r = toInt(sha512(cat(k.prefix, m))) % L, R = penc(pmul(r, G));")
+  push(r, "  var h = toInt(sha512(cat(R, A, m))) % L, S = (r + h * k.a) % L;")
+  push(r, "  return hex(cat(R, toBytes(S, 32)));")
+  push(r, "};")
+  push(r, "api.verify = function (pubHex, msg, sigHex) {")
+  push(r, "  try {")
+  push(r, "    var A = unhex(pubHex, 32), sg = unhex(sigHex, 64); if (!A || !sg) return false;")
+  push(r, "    var Rb = sg.slice(0, 32), S = toInt(sg.slice(32)); if (S >= L) return false;")
+  push(r, "    var Ap = pdec(A), Rp = pdec(Rb); if (!Ap || !Rp) return false;")
+  push(r, "    var h = toInt(sha512(cat(Rb, A, utf8(msg)))) % L;")
+  push(r, "    return peq(pmul(S, G), padd(Rp, pmul(h, Ap)));")
+  push(r, "  } catch (e) { return false; }")
+  push(r, "};")
+  push(r, "api.pick = function (done) {")
+  push(r, "  var i = document.createElement('input'); i.type = 'file'; i.accept = '.abyssdlc,.json,.txt';")
+  push(r, "  i.onchange = function () { var f = i.files[0]; if (!f) return done(false); f.text().then(function (t) { done(t); }, function () { done(false); }); };")
+  push(r, "  i.click();")
+  push(r, "};")
+  push(r, "api.save = function (name, text) {")
+  push(r, "  var u = URL.createObjectURL(new Blob([text], { type: 'text/plain' })), a = document.createElement('a');")
+  push(r, "  a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();")
+  push(r, "  setTimeout(function () { URL.revokeObjectURL(u); }, 10000);")
+  push(r, "};")
+  push(r, "return api;")
+  joinList(r, "\n")
+]
+
+#dlcApi[
+  @(not(dlcApiObj))[
+    {win} = doc().defaultView
+    {boot} = create(win.Function, dlcJs())
+    dlcApiObj = boot()
+  ]
+  dlcApiObj
+]
+
+// ---------- the game's own settings ----------
+#dlcGameId[
+  {g} = game.DLC_GAME
+  @(g)[ g ][ "" ]
+]
+
+#dlcKey[
+  {k} = game.DLC_KEY
+  @(k)[ k ][ "" ]
+]
+
+#dlcReady[ and(gt(size(dlcGameId()), 0), gt(size(dlcKey()), 0)) ]
+
+// ---------- checking a DLC file ----------
+#dlcIsText(x)[ eq(text(x), x) ]
+#dlcIsMap(x)[ eq(slice(jsonWrite(x), 0, 1), "{") ]
+#dlcIsList(x)[ eq(slice(jsonWrite(x), 0, 1), "[") ]
+
+#dlcIdOk(id)[
+  {ok} = dlcIsText(id)
+  @(ok)[ ok = and(gt(size(id), 0), lte(size(id), 40)) ]
+  @(ok)[
+    %(size(id), i)[ @(not(has("abcdefghijklmnopqrstuvwxyz0123456789-_", slice(id, i, add(i, 1)))))[ ok = false ] ]
+  ]
+  ok
+]
+
+// Looks at the text of a DLC file. Gives a map: ok, error (when not ok) and dlc (the signed part, read back).
+#dlcCheck(body)[
+  {res} = map()
+  res.ok = false
+  res.error = ""
+  res.dlc = false
+  {why} = ""
+  {file} = false
+  {d} = false
+  @(not(dlcReady()))[ why = "This game isn't set up for DLC (it has no DLC_GAME and DLC_KEY)." ]
+  @(and(not(size(why)), or(not(dlcIsText(body)), neq(slice(body, 0, 1), "{"))))[ why = "That isn't a DLC file." ]
+  @(not(size(why)))[
+    file = jsonRead(body)
+    @(not(file))[ why = "That isn't a DLC file." ]
+  ]
+  @(not(size(why)))[
+    @(not(and(eq(get(file, "abyssdlc"), DLC_FORMAT), dlcIsText(get(file, "payload")), dlcIsText(get(file, "sig")))))[
+      why = "That isn't a DLC file, or it is from a newer version than this game understands."
+    ]
+  ]
+  @(not(size(why)))[
+    @(not(dlcApi().verify(dlcKey(), get(file, "payload"), get(file, "sig"))))[
+      why = "This DLC's signature is wrong. The file was changed, or it was not made for this game."
+    ]
+  ]
+  @(not(size(why)))[
+    @(neq(slice(get(file, "payload"), 0, 1), "{"))[ why = "This DLC has no contents." ][
+      d = jsonRead(get(file, "payload"))
+      @(not(d))[ why = "This DLC has no contents." ]
+    ]
+  ]
+  @(not(size(why)))[
+    @(neq(get(d, "game"), dlcGameId()))[ why = join("This DLC is for a different game (", text(get(d, "game")), ").") ]
+  ]
+  @(not(size(why)))[
+    @(not(dlcIdOk(get(d, "id"))))[ why = "This DLC's id is not valid." ]
+  ]
+  @(not(size(why)))[
+    @(not(gte(number(get(d, "version")), 1)))[ why = "This DLC's version is not valid." ]
+  ]
+  @(not(size(why)))[
+    @(not(dlcIsMap(get(d, "items"))))[ why = "This DLC has no contents." ]
+  ]
+  res.error = why
+  @(not(size(why)))[
+    res.ok = true
+    res.dlc = d
+  ]
+  res
+]
+
+// ---------- what is installed ----------
+#dlcIndexKey[ join("dlc:", dlcGameId(), ":index") ]
+#dlcSaveKey(id)[ join("dlc:", dlcGameId(), ":", id) ]
+
+#dlcSavedIds[
+  {raw} = storeGet(dlcIndexKey())
+  {ids} = list()
+  @(raw)[
+    {got} = jsonRead(raw)
+    @(got)[ ids = got ]
+  ]
+  ids
+]
+
+#dlcWriteIds(ids)[ storeSet(dlcIndexKey(), jsonWrite(ids)) ]
+
+// A hook for other packs: runs for each DLC when it is installed or loaded. "DLC Sprites (engine)" replaces it.
+#dlcApplySprites(d)[ true ]
+
+#dlcActivate(d)[
+  put(dlcMap, get(d, "id"), d)
+  dlcApplySprites(d)
+  true
+]
+
+// Reads the installed DLC from the browser and checks each one again. Called when the game starts, and by
+// any function here that needs it.
+#dlcEnsure[
+  @(and(not(dlcLoaded), dlcReady()))[
+    dlcLoaded = true
+    dlcMap = map()
+    dlcWhy = map()
+    %(dlcSavedIds(), id)[
+      {raw} = storeGet(dlcSaveKey(id))
+      @(raw)[
+        {c} = dlcCheck(raw)
+        {good} = false
+        @(c.ok)[ good = eq(get(c.dlc, "id"), id) ]
+        @(good)[ dlcActivate(c.dlc) ][
+          put(dlcWhy, id, join(c.error, ""))
+          @(c.ok)[ put(dlcWhy, id, "This DLC was saved under a different id.") ]
+        ]
+      ]
+    ]
+  ]
+  true
+]
+
+{dlcStart} = later(0, #[ dlcEnsure() ])
+
+#dlcHas(id)[
+  dlcEnsure()
+  has(dlcMap, id)
+]
+
+#dlcList[
+  dlcEnsure()
+  keys(dlcMap)
+]
+
+#dlcInfo(id)[
+  dlcEnsure()
+  {out} = false
+  @(has(dlcMap, id))[
+    {d} = get(dlcMap, id)
+    out = map()
+    out.id = get(d, "id")
+    out.name = get(d, "name")
+    out.version = get(d, "version")
+  ]
+  out
+]
+
+#dlcItems(id)[
+  dlcEnsure()
+  {out} = false
+  @(has(dlcMap, id))[ out = get(get(dlcMap, id), "items") ]
+  out
+]
+
+#dlcData(id, key)[
+  {items} = dlcItems(id)
+  {out} = false
+  @(items)[
+    @(has(items, "data"))[
+      {data} = get(items, "data")
+      @(dlcIsMap(data))[ @(has(data, key))[ out = get(data, key) ] ]
+    ]
+  ]
+  out
+]
+
+#dlcRejected[
+  dlcEnsure()
+  {out} = map()
+  %(keys(dlcWhy), k)[ @(size(get(dlcWhy, k)))[ put(out, k, get(dlcWhy, k)) ] ]
+  out
+]
+
+#dlcRemove(id)[
+  dlcEnsure()
+  storeRemove(dlcSaveKey(id))
+  dlcWriteIds(keep(dlcSavedIds(), #(x)[ neq(x, id) ]))
+  {rest} = map()
+  %(keys(dlcMap), k)[ @(neq(k, id))[ put(rest, k, get(dlcMap, k)) ] ]
+  dlcMap = rest
+  true
+]
+
+// ---------- installing ----------
+#dlcInstallText(body)[
+  dlcEnsure()
+  {res} = map()
+  res.ok = false
+  res.id = false
+  res.error = ""
+  {c} = dlcCheck(body)
+  res.error = c.error
+  @(c.ok)[
+    {d} = c.dlc
+    {id} = get(d, "id")
+    {mine} = false
+    @(has(dlcMap, id))[ mine = get(dlcMap, id) ]
+    {older} = false
+    @(mine)[ older = lte(number(get(d, "version")), number(get(mine, "version"))) ]
+    @(older)[
+      res.error = join("This DLC is already installed (version ", get(mine, "version"), ").")
+    ][
+      @(not(storeSet(dlcSaveKey(id), body)))[ res.error = "The browser's storage is full, so the DLC could not be saved." ][
+        @(not(has(dlcSavedIds(), id)))[
+          {ids} = dlcSavedIds()
+          push(ids, id)
+          dlcWriteIds(ids)
+        ]
+        dlcActivate(d)
+        put(dlcWhy, id, "")
+        res.ok = true
+        res.id = id
+        res.error = ""
+      ]
+    ]
+  ]
+  res
+]
+
+#dlcInstall(done)[
+  dlcApi().pick(#(t)[
+    @(t)[ done(dlcInstallText(t)) ][
+      {res} = map()
+      res.ok = false
+      res.id = false
+      res.error = "No file was chosen, or it could not be read."
+      done(res)
+    ]
+  ])
+  true
+]

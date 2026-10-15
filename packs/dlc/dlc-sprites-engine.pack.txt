@@ -1,0 +1,30 @@
+//@ pack DLC Sprites (engine)
+//@ target engine
+// Makes the sprites in a DLC usable in the game. When a DLC is installed, or checked again at start-up, every
+// sprite in its "sprites" part is added with spriteAdd, so drawSprite("name", x, y), hasSprite("name"),
+// spriteWidth("name") and spriteHeight("name") work with them like any sprite from the Sprites tab.
+// A DLC sprite with the same name as one in the game replaces it, which is handy for new looks.
+//
+// A DLC's sprites are drawn in the Sprites tab of the game that makes the DLC, and ticked in the DLC Maker's
+// list, so there is nothing else to do.
+//
+// Dependencies: DLC (engine), Sprites (engine). Both must be above this pack in the Packs list.
+// This pack replaces dlcApplySprites, which DLC (engine) leaves empty on purpose.
+
+#dlcApplySprites(d)[
+  {items} = get(d, "items")
+  @(has(items, "sprites"))[
+    {all} = get(items, "sprites")
+    @(dlcIsMap(all))[
+      %(keys(all), name)[
+        {s} = get(all, name)
+        @(dlcIsList(s))[
+          @(eq(size(s), 2))[
+            @(and(dlcIsList(get(s, 0)), dlcIsList(get(s, 1))))[ spriteAdd(name, get(s, 0), get(s, 1)) ]
+          ]
+        ]
+      ]
+    ]
+  ]
+  true
+]

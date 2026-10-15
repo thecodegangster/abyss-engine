@@ -1,0 +1,714 @@
+//@ pack DLC Maker (UI)
+//@ target ui
+// Adds a DLC tab next to Play, Code, Audio and Packs, for making downloadable content (DLC) for your game.
+// The game that takes the DLC needs the "DLC (engine)" pack, and the "DLC Sprites (engine)" pack if the DLC
+// carries sprites. This pack is only for you, the maker: it is not part of an exported game.
+//
+//   1. The game's key   Every game has one signing key, made once and never changed. The secret half stays in
+//                       this browser (back it up!) and signs your DLC. The public half goes into your game code,
+//                       in a game tab named DLC, and the game uses it to check every DLC file it is given.
+//   2. Making a DLC     Give it an id, a name and a version. Tick sprites from your Sprites tab to carry along,
+//                       and add any data you like as JSON. Make DLC file signs it and saves a .abyssdlc file
+//                       you can give to players. Players install it with dlcInstall in your game.
+//
+// Back up the key: Back up key file saves a small file. If this browser's data is ever cleared and you have no
+// backup, no new DLC can be made for that game, because the game only accepts its own key. Keep the file private:
+// anyone who has it can make DLC for your game. Restore key file puts it back (in this or another browser).
+//
+// A DLC with a higher version replaces the older one a player already has. A DLC's sprites with the same name as
+// ones in your game replace them, so ticking a sprite you also use in the game is how you make a re-skin.
+//
+// Dependencies: DLC (engine), which reads the files this pack makes. For a DLC's sprites to show up in the game,
+// the game also needs DLC Sprites (engine), which needs Sprites (engine). Sprites you can tick here are the ones in
+// your project's Sprites game tab, which Sprites (UI) writes. (This pack reads that tab itself, so Sprites (UI)
+// doesn't have to be turned on.)
+// This pack only adds things. It does not replace any of the UI's own functions. Every name it adds starts with dlm or DLM.
+
+{DLM_SPMARK} = "//@ sprites v1"
+{DLM_TABMARK} = "//@ dlc v1"
+{DLM_KEYPREFIX} = "dlcmaker:secret:"
+{DLM_NAMES} = "abcdefghijklmnopqrstuvwxyz0123456789-_"
+{DLM_FORMAT} = 1
+{DLM_GAMELINE} = "{DLC_GAME} = "
+{DLM_KEYLINE} = "{DLC_KEY} = "
+
+// ---------- state ----------
+{dlmApiObj} = false
+{dlmGame} = ""
+{dlmPick} = map()
+{dlmFound} = list()
+{dlmText} = ""
+{dlmArmed} = false
+
+// ---------- page pieces (made by dlmInstall) ----------
+{dlmGameIn} = false
+{dlmKeyNote} = false
+{dlmKeyBox} = false
+{dlmMakeBtn} = false
+{dlmPutBtn} = false
+{dlmBackBtn} = false
+{dlmIdIn} = false
+{dlmNameIn} = false
+{dlmVerIn} = false
+{dlmSpBox} = false
+{dlmDataIn} = false
+{dlmSum} = false
+{dlmOut} = false
+{dlmSize} = false
+{dlmMsg} = false
+{dlmSaveBtn} = false
+{dlmCopyBtn} = false
+{dlmMakeFileBtn} = false
+
+// ---------- look ----------
+#dlmCss[
+  {r} = list()
+  push(r, ".main[data-view=dlcmaker] { grid-template-columns: minmax(0, 1fr); }")
+  push(r, ".main[data-view=dlcmaker] .stage-pane, .main[data-view=dlcmaker] .code-pane { display: none; }")
+  push(r, ".main[data-view=dlcmaker] #dlcmaker { display: flex; }")
+  push(r, ".dlm-wrap { max-width: 760px; display: flex; flex-direction: column; gap: 14px; }")
+  push(r, ".dlm-card { background: var(--trench); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }")
+  push(r, ".dlm-h { font-weight: 700; font-size: 15px; margin: 0 0 4px; }")
+  push(r, ".dlm-note { color: var(--mist); font-size: 13px; margin: 2px 0 8px; overflow-wrap: anywhere; }")
+  push(r, ".dlm-note.dlm-bad { color: #ffd6de; background: #3a1622; border-radius: 8px; padding: 8px 10px; }")
+  push(r, ".dlm-note.dlm-good { color: #d6ffe6; background: #12331f; border-radius: 8px; padding: 8px 10px; }")
+  push(r, ".dlm-label { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--mist); margin: 10px 0 2px; }")
+  push(r, ".dlm-in { width: 100%; box-sizing: border-box; background: var(--abyss); color: var(--foam); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; }")
+  push(r, ".dlm-area { width: 100%; box-sizing: border-box; min-height: 92px; resize: vertical; background: var(--abyss); color: var(--foam); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; word-break: break-all; }")
+  push(r, ".dlm-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }")
+  push(r, ".dlm-row .btn:disabled { opacity: .4; }")
+  push(r, ".dlm-cols { display: flex; flex-wrap: wrap; gap: 10px; }")
+  push(r, ".dlm-cols > div { flex: 1 1 180px; min-width: 0; }")
+  push(r, ".dlm-check { display: flex; gap: 8px; align-items: center; padding: 4px 0; font-size: 14px; }")
+  push(r, ".dlm-check input { width: 18px; height: 18px; flex: none; accent-color: var(--skin); }")
+  push(r, ".dlm-check small { color: var(--mist); font-size: 12.5px; }")
+  push(r, ".dlm-size { color: var(--mist); font-size: 13px; }")
+  push(r, "@media (max-width: 560px) { .bar { gap: 6px; padding: 8px 6px; } .views { min-width: 0; overflow-x: auto; scrollbar-width: none; } .views::-webkit-scrollbar { display: none; } .views button { flex: none; padding: 6px 8px; font-size: 13px; } .bar .btn { padding: 0 10px; } }")
+  push(r, "@media (max-width: 480px) { .brand { display: none; } }")
+  joinList(r, "\n")
+]
+
+// ---------- the signing code ----------
+// A small piece of JavaScript (Ed25519 signatures). It is the same text as in the "DLC (engine)" pack, which
+// uses it to check what this pack signs. A pack can't share code between the editor and the game.
+#dlmJs[
+  {r} = list()
+  push(r, "var P = (1n << 255n) - 19n;")
+  push(r, "var L = (1n << 252n) + 27742317777372353535851937790883648493n;")
+  push(r, "var M64 = (1n << 64n) - 1n;")
+  push(r, "function md(a, m) { var r = a % (m || P); return r >= 0n ? r : r + (m || P); }")
+  push(r, "function pw(b, e, m) { var r = 1n; b = md(b, m); while (e > 0n) { if (e & 1n) r = md(r * b, m); b = md(b * b, m); e >>= 1n; } return r; }")
+  push(r, "function inv(a) { return pw(a, P - 2n); }")
+  push(r, "var D = md(-121665n * inv(121666n));")
+  push(r, "var SQRTM1 = pw(2n, (P - 1n) / 4n);")
+  push(r, "function root(n, k) {")
+  push(r, "  var x = 1n << (BigInt(n.toString(2).length) / k + 1n);")
+  push(r, "  for (;;) { var y = ((k - 1n) * x + n / (x ** (k - 1n))) / k; if (y >= x) return x; x = y; }")
+  push(r, "}")
+  push(r, "var primes = [];")
+  push(r, "for (var c = 2; primes.length < 80; c++) { var ok = true; for (var i = 0; i < primes.length; i++) if (c % primes[i] === 0) ok = false; if (ok) primes.push(c); }")
+  push(r, "var K = primes.map(function (p) { return root(BigInt(p) << 192n, 3n) & M64; });")
+  push(r, "var H0 = primes.slice(0, 8).map(function (p) { return root(BigInt(p) << 128n, 2n) & M64; });")
+  push(r, "function rotr(x, n) { return ((x >> n) | (x << (64n - n))) & M64; }")
+  push(r, "function sha512(m) {")
+  push(r, "  var H = H0.slice(), len = m.length, padLen = ((len + 17 + 127) >> 7) << 7, b = new Uint8Array(padLen);")
+  push(r, "  b.set(m); b[len] = 128;")
+  push(r, "  var bits = BigInt(len) * 8n;")
+  push(r, "  for (var i = 0; i < 16; i++) b[padLen - 1 - i] = Number((bits >> BigInt(8 * i)) & 255n);")
+  push(r, "  for (var off = 0; off < padLen; off += 128) {")
+  push(r, "    var W = [], i, j;")
+  push(r, "    for (i = 0; i < 16; i++) { var w = 0n; for (j = 0; j < 8; j++) w = (w << 8n) | BigInt(b[off + i * 8 + j]); W.push(w); }")
+  push(r, "    for (i = 16; i < 80; i++) {")
+  push(r, "      var a15 = W[i - 15], a2 = W[i - 2];")
+  push(r, "      var s0 = rotr(a15, 1n) ^ rotr(a15, 8n) ^ (a15 >> 7n), s1 = rotr(a2, 19n) ^ rotr(a2, 61n) ^ (a2 >> 6n);")
+  push(r, "      W.push((W[i - 16] + s0 + W[i - 7] + s1) & M64);")
+  push(r, "    }")
+  push(r, "    var a = H[0], bb = H[1], cc = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];")
+  push(r, "    for (i = 0; i < 80; i++) {")
+  push(r, "      var S1 = rotr(e, 14n) ^ rotr(e, 18n) ^ rotr(e, 41n), ch = ((e & f) ^ (~e & g)) & M64;")
+  push(r, "      var t1 = (h + S1 + ch + K[i] + W[i]) & M64;")
+  push(r, "      var S0 = rotr(a, 28n) ^ rotr(a, 34n) ^ rotr(a, 39n), mj = (a & bb) ^ (a & cc) ^ (bb & cc);")
+  push(r, "      var t2 = (S0 + mj) & M64;")
+  push(r, "      h = g; g = f; f = e; e = (d + t1) & M64; d = cc; cc = bb; bb = a; a = (t1 + t2) & M64;")
+  push(r, "    }")
+  push(r, "    var v = [a, bb, cc, d, e, f, g, h];")
+  push(r, "    for (i = 0; i < 8; i++) H[i] = (H[i] + v[i]) & M64;")
+  push(r, "  }")
+  push(r, "  var out = new Uint8Array(64);")
+  push(r, "  for (var k = 0; k < 8; k++) for (var q = 0; q < 8; q++) out[k * 8 + q] = Number((H[k] >> BigInt(56 - 8 * q)) & 255n);")
+  push(r, "  return out;")
+  push(r, "}")
+  push(r, "function cat() { var n = 0, i; for (i = 0; i < arguments.length; i++) n += arguments[i].length; var o = new Uint8Array(n), p = 0; for (i = 0; i < arguments.length; i++) { o.set(arguments[i], p); p += arguments[i].length; } return o; }")
+  push(r, "function toInt(b) { var r = 0n; for (var i = b.length - 1; i >= 0; i--) r = (r << 8n) | BigInt(b[i]); return r; }")
+  push(r, "function toBytes(n, len) { var o = new Uint8Array(len); for (var i = 0; i < len; i++) { o[i] = Number(n & 255n); n >>= 8n; } return o; }")
+  push(r, "function padd(p, q) {")
+  push(r, "  var A = md((p[1] - p[0]) * (q[1] - q[0])), B = md((p[1] + p[0]) * (q[1] + q[0])), C = md(2n * p[3] * q[3] * D), Dd = md(2n * p[2] * q[2]);")
+  push(r, "  var E = B - A, F = Dd - C, G = Dd + C, Hh = B + A;")
+  push(r, "  return [md(E * F), md(G * Hh), md(F * G), md(E * Hh)];")
+  push(r, "}")
+  push(r, "function pmul(s, p) { var q = [0n, 1n, 1n, 0n]; while (s > 0n) { if (s & 1n) q = padd(q, p); p = padd(p, p); s >>= 1n; } return q; }")
+  push(r, "function penc(p) { var zi = inv(p[2]), x = md(p[0] * zi), y = md(p[1] * zi); return toBytes(y | ((x & 1n) << 255n), 32); }")
+  push(r, "function pdec(b) {")
+  push(r, "  var n = toInt(b), sign = n >> 255n, y = n & ((1n << 255n) - 1n);")
+  push(r, "  if (y >= P) return null;")
+  push(r, "  var y2 = md(y * y), x2 = md((y2 - 1n) * inv(D * y2 + 1n)), x = pw(x2, (P + 3n) / 8n);")
+  push(r, "  if (md(x * x - x2) !== 0n) x = md(x * SQRTM1);")
+  push(r, "  if (md(x * x - x2) !== 0n) return null;")
+  push(r, "  if (x === 0n && sign === 1n) return null;")
+  push(r, "  if ((x & 1n) !== sign) x = P - x;")
+  push(r, "  return [x, y, 1n, md(x * y)];")
+  push(r, "}")
+  push(r, "function peq(p, q) { return md(p[0] * q[2] - q[0] * p[2]) === 0n && md(p[1] * q[2] - q[1] * p[2]) === 0n; }")
+  push(r, "var GY = md(4n * inv(5n)), GX = pdec(toBytes(GY, 32))[0];")
+  push(r, "var G = [GX, GY, 1n, md(GX * GY)];")
+  push(r, "function hex(b) { var s = ''; for (var i = 0; i < b.length; i++) s += (b[i] < 16 ? '0' : '') + b[i].toString(16); return s; }")
+  push(r, "function unhex(s, len) {")
+  push(r, "  s = String(s);")
+  push(r, "  if (s.length !== len * 2) return null;")
+  push(r, "  var o = new Uint8Array(len);")
+  push(r, "  for (var i = 0; i < len; i++) { var v = parseInt(s.substr(i * 2, 2), 16); if (isNaN(v) || !/^[0-9a-fA-F]{2}$/.test(s.substr(i * 2, 2))) return null; o[i] = v; }")
+  push(r, "  return o;")
+  push(r, "}")
+  push(r, "function utf8(s) { return new TextEncoder().encode(String(s)); }")
+  push(r, "function secret(seed) { var h = sha512(seed), a = toInt(h.slice(0, 32)); a &= (1n << 254n) - 8n; a |= 1n << 254n; return { a: a, prefix: h.slice(32) }; }")
+  push(r, "var api = {};")
+  push(r, "api.keypair = function () {")
+  push(r, "  var seed = new Uint8Array(32); crypto.getRandomValues(seed);")
+  push(r, "  return { secret: hex(seed), pub: api.pub(hex(seed)) };")
+  push(r, "};")
+  push(r, "api.pub = function (seedHex) { var s = unhex(seedHex, 32); if (!s) return false; return hex(penc(pmul(secret(s).a, G))); };")
+  push(r, "api.sign = function (seedHex, msg) {")
+  push(r, "  var s = unhex(seedHex, 32); if (!s) return false;")
+  push(r, "  var k = secret(s), A = penc(pmul(k.a, G)), m = utf8(msg);")
+  push(r, "  var r = toInt(sha512(cat(k.prefix, m))) % L, R = penc(pmul(r, G));")
+  push(r, "  var h = toInt(sha512(cat(R, A, m))) % L, S = (r + h * k.a) % L;")
+  push(r, "  return hex(cat(R, toBytes(S, 32)));")
+  push(r, "};")
+  push(r, "api.verify = function (pubHex, msg, sigHex) {")
+  push(r, "  try {")
+  push(r, "    var A = unhex(pubHex, 32), sg = unhex(sigHex, 64); if (!A || !sg) return false;")
+  push(r, "    var Rb = sg.slice(0, 32), S = toInt(sg.slice(32)); if (S >= L) return false;")
+  push(r, "    var Ap = pdec(A), Rp = pdec(Rb); if (!Ap || !Rp) return false;")
+  push(r, "    var h = toInt(sha512(cat(Rb, A, utf8(msg)))) % L;")
+  push(r, "    return peq(pmul(S, G), padd(Rp, pmul(h, Ap)));")
+  push(r, "  } catch (e) { return false; }")
+  push(r, "};")
+  push(r, "api.pick = function (done) {")
+  push(r, "  var i = document.createElement('input'); i.type = 'file'; i.accept = '.abyssdlc,.json,.txt';")
+  push(r, "  i.onchange = function () { var f = i.files[0]; if (!f) return done(false); f.text().then(function (t) { done(t); }, function () { done(false); }); };")
+  push(r, "  i.click();")
+  push(r, "};")
+  push(r, "api.save = function (name, text) {")
+  push(r, "  var u = URL.createObjectURL(new Blob([text], { type: 'text/plain' })), a = document.createElement('a');")
+  push(r, "  a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();")
+  push(r, "  setTimeout(function () { URL.revokeObjectURL(u); }, 10000);")
+  push(r, "};")
+  push(r, "return api;")
+  joinList(r, "\n")
+]
+
+#dlmApi[
+  @(not(dlmApiObj))[
+    {win} = doc().defaultView
+    {boot} = create(win.Function, dlmJs())
+    dlmApiObj = boot()
+  ]
+  dlmApiObj
+]
+
+// ---------- small helpers ----------
+#dlmAdd(parent, tag, cls, label)[
+  {el} = make(tag)
+  el.className = cls
+  el.textContent = label
+  parent.appendChild(el)
+  el
+]
+
+#dlmButton(parent, label, fn)[
+  {b} = dlmAdd(parent, "button", "btn", label)
+  b.type = "button"
+  on(b, "click", fn)
+  b
+]
+
+#dlmPlural(n, one, many)[ @(eq(n, 1))[ join(n, " ", one) ][ join(n, " ", many) ] ]
+
+// A name for the game or a DLC: lowercase letters, numbers, - and _.
+#dlmSlug(raw)[
+  {out} = ""
+  {low} = lower(text(raw))
+  %(size(low), i)[
+    {c} = slice(low, i, add(i, 1))
+    @(has(DLM_NAMES, c))[ out = join(out, c) ][ @(eq(c, " "))[ out = join(out, "-") ] ]
+  ]
+  slice(out, 0, 40)
+]
+
+#dlmTrim(t)[
+  {a} = 0
+  {b} = size(t)
+  %(and(lt(a, b), has(" \n\t\r", slice(t, a, add(a, 1)))))[ a = add(a, 1) ]
+  %(and(gt(b, a), has(" \n\t\r", slice(t, sub(b, 1), b))))[ b = sub(b, 1) ]
+  slice(t, a, b)
+]
+
+// The text between each pair of double quotes on a line.
+#dlmQuoted(line)[
+  {out} = list()
+  {parts} = split(line, "\"")
+  %(size(parts), i)[ @(eq(mod(i, 2), 1))[ push(out, get(parts, i)) ] ]
+  out
+]
+
+#dlmProjectName[
+  {pr} = H.projects()
+  {nm} = "my-game"
+  %(pr.items, p)[ @(eq(get(p, "id"), pr.active))[ nm = get(p, "name") ] ]
+  nm
+]
+
+#dlmSay(msg, kind)[
+  dlmMsg.textContent = msg
+  dlmMsg.className = "dlm-note"
+  @(eq(kind, "bad"))[ dlmMsg.className = "dlm-note dlm-bad" ]
+  @(eq(kind, "good"))[ dlmMsg.className = "dlm-note dlm-good" ]
+]
+
+// ---------- the key ----------
+#dlmSecret(game)[
+  {s} = false
+  @(size(game))[ s = storeGet(join(DLM_KEYPREFIX, game)) ]
+  @(s)[ s ][ "" ]
+]
+
+#dlmPub(game)[
+  {s} = dlmSecret(game)
+  {p} = false
+  @(size(s))[ p = dlmApi().pub(s) ]
+  @(p)[ p ][ "" ]
+]
+
+#dlmFindTab(mark)[
+  {found} = -1
+  %(size(gameTexts), i)[
+    @(eq(slice(get(gameTexts, i), 0, size(mark)), mark))[ found = i ]
+  ]
+  found
+]
+
+// What the game's DLC tab says: a map with game and pub, or false if there is no such tab.
+#dlmTabInfo[
+  {i} = dlmFindTab(DLM_TABMARK)
+  {res} = false
+  @(gte(i, 0))[
+    res = map()
+    res.game = ""
+    res.pub = ""
+    %(split(get(gameTexts, i), "\n"), line)[
+      {q} = dlmQuoted(line)
+      @(and(eq(slice(line, 0, size(DLM_GAMELINE)), DLM_GAMELINE), size(q)))[ res.game = get(q, 0) ]
+      @(and(eq(slice(line, 0, size(DLM_KEYLINE)), DLM_KEYLINE), size(q)))[ res.pub = get(q, 0) ]
+    ]
+  ]
+  res
+]
+
+#dlmTabCode(game, pub)[
+  {out} = list(DLM_TABMARK)
+  push(out, "// Made by the DLC tab. The game's DLC name and public key: the DLC (engine) pack checks every DLC file")
+  push(out, "// against them. Keep them as they are. A different key means DLC made before stops working.")
+  push(out, join(DLM_GAMELINE, quote(game)))
+  push(out, join(DLM_KEYLINE, quote(pub)))
+  joinList(out, "\n")
+]
+
+// Puts the game's name and public key into the game tab named DLC (making it the first time).
+#dlmCommit(game, pub)[
+  {code} = dlmTabCode(game, pub)
+  {i} = dlmFindTab(DLM_TABMARK)
+  @(lt(i, 0))[
+    {nm} = "DLC"
+    {n} = 1
+    %(has(gameNames, nm))[
+      n = add(n, 1)
+      nm = join("DLC ", n)
+    ]
+    push(gameNames, nm)
+    push(gameTexts, code)
+    i = sub(size(gameTexts), 1)
+  ][ put(gameTexts, i, code) ]
+  composeGame()
+  H.autosave()
+  @(eq(tab, "game"))[ renderSubtabs() ]
+  @(and(eq(tab, "game"), eq(gameSel, i)))[ showEditor() ]
+]
+
+#dlmGameName[
+  {g} = dlmSlug(dlmGameIn.value)
+  g
+]
+
+#dlmMakeKey[
+  {game} = dlmGameName()
+  @(not(size(game)))[ dlmSay("Give the game a name first (letters, numbers, - and _).", "bad") ][
+    @(size(dlmSecret(game)))[ dlmSay("This game already has its key. There is one key per game and it never changes.", "bad") ][
+      {kp} = dlmApi().keypair()
+      @(not(storeSet(join(DLM_KEYPREFIX, game), kp.secret)))[ dlmSay("Your browser's storage is full, so the key could not be saved.", "bad") ][
+        dlmCommit(game, kp.pub)
+        dlmSay("Key made. Now save a backup with Back up key file, so you can never lose it.", "good")
+      ]
+    ]
+  ]
+  dlmRender()
+]
+
+#dlmPutKey[
+  {game} = dlmGameName()
+  {pub} = dlmPub(game)
+  @(size(pub))[
+    dlmCommit(game, pub)
+    dlmSay("The key is in your game code, in the game tab named DLC.", "good")
+  ][ dlmSay("There is no key for this game yet.", "bad") ]
+  dlmRender()
+]
+
+#dlmBackup[
+  {game} = dlmGameName()
+  {s} = dlmSecret(game)
+  @(size(s))[
+    {m} = map()
+    put(m, "abyssdlckey", 1)
+    put(m, "game", game)
+    put(m, "secret", s)
+    put(m, "pub", dlmPub(game))
+    H.saveFile(join(game, ".abyssdlckey"), jsonWrite(m))
+    dlmSay("Saved. Keep that file somewhere safe and private: anyone who has it can make DLC for your game.", "good")
+  ][ dlmSay("There is no key for this game yet.", "bad") ]
+]
+
+#dlmRestore[
+  H.pickFile(#(t)[
+    {why} = ""
+    {m} = false
+    @(not(t))[ why = "Couldn't read that file." ][
+      @(neq(slice(t, 0, 1), "{"))[ why = "That isn't a key file." ][
+        m = jsonRead(t)
+        @(not(m))[ why = "That isn't a key file." ]
+      ]
+    ]
+    @(not(size(why)))[
+      @(not(and(eq(get(m, "abyssdlckey"), 1), eq(text(get(m, "game")), get(m, "game")), eq(text(get(m, "secret")), get(m, "secret")))))[ why = "That isn't a key file." ]
+    ]
+    @(not(size(why)))[
+      @(not(dlmApi().pub(get(m, "secret"))))[ why = "The key in that file is damaged." ]
+    ]
+    @(not(size(why)))[
+      {game} = dlmSlug(get(m, "game"))
+      @(not(size(game)))[ why = "That key file has no game name." ][
+        @(storeSet(join(DLM_KEYPREFIX, game), get(m, "secret")))[
+          dlmGameIn.value = game
+          dlmSay(join("Key restored for ", game, ". Tap Put key in the game if this project's game code doesn't have it yet."), "good")
+        ][ why = "Your browser's storage is full, so the key could not be saved." ]
+      ]
+    ]
+    @(size(why))[ dlmSay(why, "bad") ]
+    dlmRender()
+  ])
+]
+
+// ---------- sprites in this project ----------
+// The sprites in the game tab named Sprites (the Sprites (UI) pack writes it): a list of maps with name, pal, rows.
+#dlmParseSprites[
+  {out} = list()
+  %(gameTexts, t)[
+    @(eq(slice(t, 0, size(DLM_SPMARK)), DLM_SPMARK))[
+      {name} = false
+      {pal} = list()
+      {rows} = list()
+      %(split(t, "\n"), line)[
+        {s} = dlmTrim(line)
+        {q} = dlmQuoted(s)
+        @(eq(slice(s, 0, 18), "put(SPRITES_DATA, "))[
+          @(name)[
+            {a} = map()
+            a.name = name
+            a.pal = pal
+            a.rows = rows
+            push(out, a)
+          ]
+          name = false
+          @(size(q))[ name = get(q, 0) ]
+          pal = list()
+          rows = list()
+        ][
+          @(name)[
+            @(eq(slice(s, 0, 6), "list(\""))[ pal = q ]
+            @(eq(slice(s, 0, 1), "\""))[ @(size(q))[ push(rows, get(q, 0)) ] ]
+          ]
+        ]
+      ]
+      @(name)[
+        {a} = map()
+        a.name = name
+        a.pal = pal
+        a.rows = rows
+        push(out, a)
+      ]
+    ]
+  ]
+  out
+]
+
+// ---------- making the file ----------
+#dlmSummary[
+  {n} = 0
+  %(dlmFound, s)[ @(get(dlmPick, get(s, "name")))[ n = add(n, 1) ] ]
+  {hasData} = gt(size(dlmTrim(dlmDataIn.value)), 0)
+  {parts} = list()
+  push(parts, dlmPlural(n, "sprite", "sprites"))
+  @(hasData)[ push(parts, "some data") ][ push(parts, "no data") ]
+  join("This DLC will carry ", joinList(parts, " and "), ".")
+]
+
+#dlmRenderSprites[
+  dlmFound = dlmParseSprites()
+  dlmSpBox.innerHTML = ""
+  @(not(size(dlmFound)))[
+    dlmAdd(dlmSpBox, "div", "dlm-note", "No sprites in this project yet. Draw some in the Sprites tab (the Sprites (UI) pack), and they will be listed here.")
+  ]
+  %(dlmFound, s)[
+    {nm} = get(s, "name")
+    {lab} = dlmAdd(dlmSpBox, "label", "dlm-check", "")
+    {cb} = dlmAdd(lab, "input", "", "")
+    cb.type = "checkbox"
+    cb.checked = false
+    @(has(dlmPick, nm))[ cb.checked = get(dlmPick, nm) ]
+    on(cb, "change", #(e)[
+      put(dlmPick, nm, cb.checked)
+      dlmSum.textContent = dlmSummary()
+    ])
+    dlmAdd(lab, "span", "", nm)
+    {rows} = get(s, "rows")
+    {w} = 0
+    @(size(rows))[ w = size(get(rows, 0)) ]
+    dlmAdd(lab, "small", "", join(w, " by ", size(rows)))
+  ]
+]
+
+// Builds, signs and checks the DLC from the form. Gives the text of the file, or says what is wrong and gives "".
+#dlmBuild[
+  {game} = dlmGameName()
+  {id} = dlmSlug(dlmIdIn.value)
+  {ver} = number(dlmVerIn.value)
+  {why} = ""
+  {pub} = dlmPub(game)
+  {info} = dlmTabInfo()
+  {items} = map()
+  {out} = ""
+  @(not(size(game)))[ why = "Give the game a name first." ]
+  @(and(not(size(why)), not(size(pub))))[ why = "This game has no key yet. Make one above." ]
+  @(not(size(why)))[
+    @(not(info))[ why = "Put the key in the game first (Put key in the game), so the game can check this DLC." ][
+      @(neq(get(info, "pub"), pub))[ why = "The game's DLC tab has a different key. Tap Put key in the game, so the game matches this key." ]
+    ]
+  ]
+  @(and(not(size(why)), info))[
+    @(neq(get(info, "game"), game))[ why = "The game's DLC tab has a different game name. Tap Put key in the game." ]
+  ]
+  @(and(not(size(why)), not(size(id))))[ why = "Give the DLC an id (letters, numbers, - and _)." ]
+  @(and(not(size(why)), not(gte(ver, 1))))[ why = "The version must be 1 or more." ]
+  {sprites} = map()
+  %(dlmFound, s)[
+    @(get(dlmPick, get(s, "name")))[ put(sprites, get(s, "name"), list(get(s, "pal"), get(s, "rows"))) ]
+  ]
+  @(size(keys(sprites)))[ put(items, "sprites", sprites) ]
+  {raw} = dlmTrim(dlmDataIn.value)
+  @(and(not(size(why)), size(raw)))[
+    @(neq(slice(raw, 0, 1), "{"))[ why = "The data must be a JSON object, starting with { (or leave it empty)." ][
+      {data} = jsonRead(raw)
+      @(not(data))[ why = "The data isn't valid JSON. Check the commas and quotes." ][ put(items, "data", data) ]
+    ]
+  ]
+  @(and(not(size(why)), not(size(keys(items)))))[ why = "This DLC is empty. Tick a sprite or add some data." ]
+  @(not(size(why)))[
+    {p} = map()
+    put(p, "game", game)
+    put(p, "id", id)
+    {nm} = dlmTrim(dlmNameIn.value)
+    @(not(size(nm)))[ nm = id ]
+    put(p, "name", nm)
+    put(p, "version", ver)
+    put(p, "items", items)
+    {payload} = jsonWrite(p)
+    {sig} = dlmApi().sign(dlmSecret(game), payload)
+    @(not(dlmApi().verify(pub, payload, sig)))[ why = "Something went wrong while signing, so no file was made." ][
+      {f} = map()
+      put(f, "abyssdlc", DLM_FORMAT)
+      put(f, "game", game)
+      put(f, "id", id)
+      put(f, "payload", payload)
+      put(f, "sig", sig)
+      out = jsonWrite(f)
+    ]
+  ]
+  @(size(why))[ dlmSay(why, "bad") ]
+  out
+]
+
+#dlmMakeFile[
+  {t} = dlmBuild()
+  dlmText = t
+  dlmOut.value = t
+  dlmSaveBtn.disabled = not(size(t))
+  dlmCopyBtn.disabled = not(size(t))
+  @(size(t))[
+    dlmSize.textContent = join(div(round(div(size(t), 100)), 10), " KB")
+    dlmSay(join("Made and checked. ", dlmSummary(), " Save the file to give it to players."), "good")
+  ][ dlmSize.textContent = "" ]
+]
+
+#dlmSaveFile[
+  @(size(dlmText))[
+    H.saveFile(join(dlmSlug(dlmIdIn.value), ".abyssdlc"), dlmText)
+    toast("Saved as a file.")
+  ]
+]
+
+#dlmCopy[
+  @(size(dlmText))[
+    dlmOut.focus()
+    dlmOut.select()
+    dlmOut.setSelectionRange(0, add(size(dlmText), 10))
+    @(exec("copy"))[ toast("Copied.") ][ toast("Press and hold the text to copy it.") ]
+  ]
+]
+
+// ---------- showing it ----------
+// Brings the key part of the page up to date.
+#dlmRender[
+  {game} = dlmGameName()
+  {pub} = dlmPub(game)
+  {info} = dlmTabInfo()
+  dlmKeyBox.value = pub
+  dlmMakeBtn.disabled = or(size(pub), not(size(game)))
+  dlmPutBtn.disabled = not(size(pub))
+  dlmBackBtn.disabled = not(size(pub))
+  dlmMakeFileBtn.disabled = not(size(pub))
+  {line} = ""
+  @(not(size(game)))[ line = "Give the game a name to begin." ][
+    @(not(size(pub)))[ line = join("There is no key for ", game, " in this browser yet. Tap Make key, or Restore key file if you already have one.") ][
+      @(not(info))[ line = "You have this game's key, but the game code doesn't have it yet. Tap Put key in the game." ][
+        @(neq(get(info, "pub"), pub))[ line = "The game code has a different key than the one in this browser. Tap Put key in the game to use this one, or Restore key file for the other." ][
+          @(neq(get(info, "game"), game))[ line = "The game code has a different game name. Tap Put key in the game." ][
+            line = "The key is in your game code. DLC made here will work in this game."
+          ]
+        ]
+      ]
+    ]
+  ]
+  dlmKeyNote.textContent = line
+]
+
+// Called when the DLC tab is opened.
+#dlmOpen[
+  {info} = dlmTabInfo()
+  @(and(not(size(dlmGameIn.value)), info))[ dlmGameIn.value = get(info, "game") ]
+  @(not(size(dlmGameIn.value)))[ dlmGameIn.value = dlmSlug(dlmProjectName()) ]
+  dlmRender()
+  dlmRenderSprites()
+  dlmSum.textContent = dlmSummary()
+]
+
+// ---------- building the tab ----------
+#dlmInstall[
+  @(not(dom("#dlcmaker")))[
+    {d} = doc()
+    {st} = make("style")
+    st.textContent = dlmCss()
+    d.head.appendChild(st)
+
+    {nav} = dom(".views")
+    {tabBtn} = make("button")
+    tabBtn.setAttribute("role", "tab")
+    tabBtn.setAttribute("aria-selected", "false")
+    tabBtn.dataset.view = "dlcmaker"
+    tabBtn.textContent = "DLC"
+    nav.insertBefore(tabBtn, nav.lastElementChild)
+    on(tabBtn, "click", #(e)[ later(40, #[ dlmOpen() ]) ])
+
+    {pane} = make("section")
+    pane.id = "dlcmaker"
+    pane.className = "audio-pane"
+    pane.setAttribute("aria-label", "DLC maker")
+    dom("#main").appendChild(pane)
+
+    {scroll} = dlmAdd(pane, "div", "a-scroll", "")
+    {wrap} = dlmAdd(scroll, "div", "dlm-wrap", "")
+
+    {key} = dlmAdd(wrap, "div", "dlm-card", "")
+    dlmAdd(key, "div", "dlm-h", "Your game's key")
+    dlmAdd(key, "div", "dlm-note", "Every game has one key, made once. The secret half stays in this browser and signs your DLC. The public half goes into your game code, so the game can check each DLC file.")
+    dlmAdd(key, "div", "dlm-label", "Game name")
+    dlmGameIn = dlmAdd(key, "input", "dlm-in", "")
+    dlmGameIn.setAttribute("aria-label", "Game name")
+    dlmGameIn.placeholder = "my-game"
+    on(dlmGameIn, "input", #(e)[ dlmRender() ])
+    dlmKeyNote = dlmAdd(key, "div", "dlm-note", "")
+    dlmKeyNote.style.marginTop = "8px"
+    dlmAdd(key, "div", "dlm-label", "Public key")
+    dlmKeyBox = dlmAdd(key, "input", "dlm-in", "")
+    dlmKeyBox.readOnly = true
+    dlmKeyBox.setAttribute("aria-label", "Public key")
+    {keyRow} = dlmAdd(key, "div", "dlm-row", "")
+    dlmMakeBtn = dlmButton(keyRow, "Make key", #(e)[ dlmMakeKey() ])
+    dlmPutBtn = dlmButton(keyRow, "Put key in the game", #(e)[ dlmPutKey() ])
+    dlmBackBtn = dlmButton(keyRow, "Back up key file", #(e)[ dlmBackup() ])
+    dlmButton(keyRow, "Restore key file", #(e)[ dlmRestore() ])
+
+    {mk} = dlmAdd(wrap, "div", "dlm-card", "")
+    dlmAdd(mk, "div", "dlm-h", "Make a DLC")
+    dlmAdd(mk, "div", "dlm-note", "A DLC is one signed file. Players install it in your game, and the game checks the signature.")
+    {cols} = dlmAdd(mk, "div", "dlm-cols", "")
+    {c1} = dlmAdd(cols, "div", "", "")
+    dlmAdd(c1, "div", "dlm-label", "DLC id")
+    dlmIdIn = dlmAdd(c1, "input", "dlm-in", "")
+    dlmIdIn.placeholder = "winter-pack"
+    dlmIdIn.setAttribute("aria-label", "DLC id")
+    {c2} = dlmAdd(cols, "div", "", "")
+    dlmAdd(c2, "div", "dlm-label", "Name")
+    dlmNameIn = dlmAdd(c2, "input", "dlm-in", "")
+    dlmNameIn.placeholder = "Winter Pack"
+    dlmNameIn.setAttribute("aria-label", "Name")
+    {c3} = dlmAdd(cols, "div", "", "")
+    dlmAdd(c3, "div", "dlm-label", "Version")
+    dlmVerIn = dlmAdd(c3, "input", "dlm-in", "")
+    dlmVerIn.value = "1"
+    dlmVerIn.setAttribute("aria-label", "Version")
+    dlmAdd(mk, "div", "dlm-label", "Sprites to carry")
+    dlmSpBox = dlmAdd(mk, "div", "", "")
+    dlmAdd(mk, "div", "dlm-label", "Data (JSON, optional)")
+    dlmDataIn = dlmAdd(mk, "textarea", "dlm-area", "")
+    dlmDataIn.placeholder = "{ \"levels\": 3, \"title\": \"Winter\" }"
+    dlmDataIn.setAttribute("aria-label", "Data as JSON")
+    on(dlmDataIn, "input", #(e)[ dlmSum.textContent = dlmSummary() ])
+    dlmSum = dlmAdd(mk, "div", "dlm-note", "")
+    dlmSum.style.marginTop = "8px"
+    {goRow} = dlmAdd(mk, "div", "dlm-row", "")
+    dlmMakeFileBtn = dlmButton(goRow, "Make DLC file", #(e)[ dlmMakeFile() ])
+    dlmSaveBtn = dlmButton(goRow, "Save file", #(e)[ dlmSaveFile() ])
+    dlmCopyBtn = dlmButton(goRow, "Copy", #(e)[ dlmCopy() ])
+    dlmSize = dlmAdd(goRow, "span", "dlm-size", "")
+    dlmSaveBtn.disabled = true
+    dlmCopyBtn.disabled = true
+    dlmMsg = dlmAdd(mk, "div", "dlm-note", "")
+    dlmMsg.style.marginTop = "8px"
+    dlmOut = dlmAdd(mk, "textarea", "dlm-area", "")
+    dlmOut.readOnly = true
+    dlmOut.setAttribute("aria-label", "DLC file text")
+    on(dlmOut, "focus", #(e)[ dlmOut.select() ])
+  ]
+  true
+]
+
+{dlmInstalled} = dlmInstall()
