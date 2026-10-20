@@ -1,0 +1,273 @@
+//@ pack Hash to Java (UI)
+//@ target ui
+// Adds a Java tab next to Play, Code, Audio and Packs. It turns the Hash code in your game tabs into Java files
+// using the "Hash to Java (compiler)" pack.
+//
+//   1. Tick the game tabs you want. Each ticked tab becomes one Java file, named after the tab
+//      (a tab called "Red Left" becomes Red_Left.java).
+//   2. Make Java builds the files. If a tab has a mistake, you are told which tab and line.
+//   3. Save each file (or Save all). Java needs one more file next to them, HashRuntime.java: the small helper
+//      the generated code uses. It is listed at the bottom, and Save all saves it too.
+//
+// The Java tab only makes text. It never runs anything and is not part of an exported game.
+//
+// Dependencies: Hash to Java (compiler), which does the compiling. It must be above this pack in the Packs list.
+// For robot code, also turn on FTC Robot Library (it changes what the compiler makes) and keep it above this pack too.
+// This pack only adds things. It does not replace any of the UI's own functions. Every name it adds starts with hju or HJU.
+
+{HJU_SKIP} = list("//@ sprites v", "//@ dlc v")
+
+// ---------- state ----------
+{hjuApiFn} = false
+{hjuPick} = map()
+{hjuNotes} = true
+{hjuResults} = list()
+{hjuRuntime} = map()
+
+// ---------- page pieces ----------
+{hjuTabBox} = false
+{hjuOutBox} = false
+{hjuMsg} = false
+{hjuNotesBox} = false
+{hjuMakeBtn} = false
+{hjuAllBtn} = false
+
+// ---------- look ----------
+#hjuCss[
+  {r} = list()
+  push(r, ".main[data-view=javatab] { grid-template-columns: minmax(0, 1fr); }")
+  push(r, ".main[data-view=javatab] .stage-pane, .main[data-view=javatab] .code-pane { display: none; }")
+  push(r, ".main[data-view=javatab] #javatab { display: flex; }")
+  push(r, ".hju-wrap { max-width: 860px; display: flex; flex-direction: column; gap: 14px; }")
+  push(r, ".hju-card { background: var(--trench); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }")
+  push(r, ".hju-h { font-weight: 700; font-size: 15px; margin: 0 0 4px; }")
+  push(r, ".hju-note { color: var(--mist); font-size: 13px; margin: 2px 0 8px; overflow-wrap: anywhere; }")
+  push(r, ".hju-note.hju-bad { color: #ffd6de; background: #3a1622; border-radius: 8px; padding: 8px 10px; }")
+  push(r, ".hju-note.hju-good { color: #d6ffe6; background: #12331f; border-radius: 8px; padding: 8px 10px; }")
+  push(r, ".hju-area { width: 100%; box-sizing: border-box; min-height: 220px; resize: vertical; background: var(--abyss); color: var(--foam); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; overflow: auto; }")
+  push(r, ".hju-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }")
+  push(r, ".hju-row .btn:disabled { opacity: .4; }")
+  push(r, ".hju-check { display: flex; gap: 8px; align-items: center; padding: 4px 0; font-size: 14px; }")
+  push(r, ".hju-check input { width: 18px; height: 18px; flex: none; accent-color: var(--skin); }")
+  push(r, ".hju-check small { color: var(--mist); font-size: 12.5px; }")
+  push(r, ".hju-size { color: var(--mist); font-size: 13px; }")
+  push(r, "@media (max-width: 560px) { .bar { gap: 6px; padding: 8px 6px; } .views { min-width: 0; overflow-x: auto; scrollbar-width: none; } .views::-webkit-scrollbar { display: none; } .views button { flex: none; padding: 6px 8px; font-size: 13px; } .bar .btn { padding: 0 10px; } }")
+  push(r, "@media (max-width: 480px) { .brand { display: none; } }")
+  joinList(r, "\n")
+]
+
+// ---------- the bridge to the compiler ----------
+// A small piece of JavaScript that calls the compiler and catches its errors, because Hash can't catch errors.
+// It gives back a plain object: ok, then java / file / pkg / runtime, or msg and line.
+#hjuJs[
+  {r} = list()
+  push(r, "return function (src, cls, file, notes) {")
+  push(r, "  try {")
+  push(r, "    var c = window.abyssEngine.compiler().c;")
+  push(r, "    if (typeof c.hjvCompile !== 'function') return { ok: false, msg: 'The Hash to Java (compiler) pack is not turned on. Turn it on in the Packs view, above this pack.', line: 0 };")
+  push(r, "    var o = notes ? {} : { notes: false };")
+  push(r, "    var res = c.hjvCompile(src, cls, file, o);")
+  push(r, "    return { ok: true, java: res.java, file: res.file, pkg: res.pkg, runtime: c.hjvRuntime(res.pkg) };")
+  push(r, "  } catch (e) {")
+  push(r, "    return { ok: false, msg: String((e && e.message) || e), line: (e && e.line) || 0 };")
+  push(r, "  }")
+  push(r, "};")
+  joinList(r, "\n")
+]
+
+#hjuCompiler[
+  @(not(hjuApiFn))[
+    {win} = doc().defaultView
+    {boot} = create(win.Function, hjuJs())
+    hjuApiFn = boot()
+  ]
+  hjuApiFn
+]
+
+// ---------- small helpers ----------
+#hjuAdd(parent, tag, cls, label)[
+  {el} = make(tag)
+  el.className = cls
+  el.textContent = label
+  parent.appendChild(el)
+  el
+]
+
+#hjuButton(parent, label, fn)[
+  {b} = hjuAdd(parent, "button", "btn", label)
+  b.type = "button"
+  on(b, "click", fn)
+  b
+]
+
+#hjuSay(msg, kind)[
+  hjuMsg.textContent = msg
+  hjuMsg.className = "hju-note"
+  @(eq(kind, "bad"))[ hjuMsg.className = "hju-note hju-bad" ]
+  @(eq(kind, "good"))[ hjuMsg.className = "hju-note hju-good" ]
+]
+
+#hjuPlural(n, one, many)[ @(eq(n, 1))[ join(n, " ", one) ][ join(n, " ", many) ] ]
+
+// Tabs holding data (sprites, DLC key) are not programs, so they are not offered.
+#hjuIsCode(i)[
+  {t} = get(gameTexts, i)
+  {ok} = true
+  %(HJU_SKIP, mark)[ @(eq(slice(t, 0, size(mark)), mark))[ ok = false ] ]
+  ok
+]
+
+#hjuTicked[
+  {out} = list()
+  %(size(gameNames), i)[
+    @(hjuIsCode(i))[
+      {nm} = get(gameNames, i)
+      @(get(hjuPick, nm))[ push(out, i) ]
+    ]
+  ]
+  out
+]
+
+#hjuKb(n)[ join(div(round(div(n, 100)), 10), " KB") ]
+
+#hjuCopyFrom(box)[
+  box.focus()
+  box.select()
+  box.setSelectionRange(0, add(size(box.value), 10))
+  @(exec("copy"))[ toast("Copied.") ][ toast("Press and hold the text to copy it.") ]
+]
+
+// ---------- tab list ----------
+#hjuRenderTabs[
+  hjuTabBox.innerHTML = ""
+  {n} = 0
+  %(size(gameNames), i)[
+    @(hjuIsCode(i))[
+      {nm} = get(gameNames, i)
+      @(not(has(hjuPick, nm)))[ put(hjuPick, nm, true) ]
+      n = add(n, 1)
+      {lab} = hjuAdd(hjuTabBox, "label", "hju-check", "")
+      {cb} = hjuAdd(lab, "input", "", "")
+      cb.type = "checkbox"
+      cb.checked = get(hjuPick, nm)
+      on(cb, "change", #(e)[ put(hjuPick, nm, cb.checked) ])
+      hjuAdd(lab, "span", "", nm)
+      hjuAdd(lab, "small", "", join(size(split(get(gameTexts, i), "\n")), " lines"))
+    ]
+  ]
+  @(not(n))[ hjuAdd(hjuTabBox, "div", "hju-note", "There is no code in this project yet.") ]
+]
+
+// ---------- making the files ----------
+#hjuFileCard(file, text)[
+  {card} = hjuAdd(hjuOutBox, "div", "hju-card", "")
+  hjuAdd(card, "div", "hju-h", file)
+  {area} = hjuAdd(card, "textarea", "hju-area", "")
+  area.value = text
+  area.readOnly = true
+  area.setAttribute("aria-label", file)
+  {row} = hjuAdd(card, "div", "hju-row", "")
+  hjuButton(row, "Save file", #(e)[
+    H.saveFile(file, text)
+    toast("Saved as a file.")
+  ])
+  hjuButton(row, "Copy", #(e)[ hjuCopyFrom(area) ])
+  hjuAdd(row, "span", "hju-size", join(hjuKb(size(text)), ", ", size(split(text, "\n")), " lines"))
+]
+
+#hjuMake[
+  hjuOutBox.innerHTML = ""
+  hjuResults = list()
+  {ids} = hjuTicked()
+  {rt} = false
+  {bad} = false
+  @(not(size(ids)))[ hjuSay("Tick at least one tab first.", "bad") ][
+    %(ids, i)[
+      @(not(bad))[
+        {nm} = get(gameNames, i)
+        {r} = hjuCompiler()(get(gameTexts, i), nm, nm, hjuNotes)
+        @(r.ok)[
+          push(hjuResults, r)
+          rt = r
+        ][
+          bad = true
+          {where} = join("Tab ", nm)
+          @(r.line)[ where = join(where, ", line ", r.line) ]
+          hjuSay(join(where, ": ", r.msg), "bad")
+        ]
+      ]
+    ]
+  ]
+  @(and(not(bad), size(hjuResults)))[
+    %(hjuResults, r)[ hjuFileCard(r.file, r.java) ]
+    hjuFileCard("HashRuntime.java", rt.runtime)
+    hjuRuntime = map()
+    hjuRuntime.file = "HashRuntime.java"
+    hjuRuntime.text = rt.runtime
+    hjuSay(join("Made ", hjuPlural(size(hjuResults), "Java file", "Java files"), " in package ", rt.pkg, ", plus HashRuntime.java. Put all of them in the same folder."), "good")
+  ]
+  hjuAllBtn.disabled = or(bad, not(size(hjuResults)))
+]
+
+#hjuSaveAll[
+  %(hjuResults, r)[ H.saveFile(r.file, r.java) ]
+  @(size(hjuResults))[
+    H.saveFile(hjuRuntime.file, hjuRuntime.text)
+    toast("Saved the files.")
+  ]
+]
+
+// Called when the Java tab is opened.
+#hjuOpen[ hjuRenderTabs() ]
+
+// ---------- building the tab ----------
+#hjuInstall[
+  @(not(dom("#javatab")))[
+    {d} = doc()
+    {st} = make("style")
+    st.textContent = hjuCss()
+    d.head.appendChild(st)
+
+    {nav} = dom(".views")
+    {tabBtn} = make("button")
+    tabBtn.setAttribute("role", "tab")
+    tabBtn.setAttribute("aria-selected", "false")
+    tabBtn.dataset.view = "javatab"
+    tabBtn.textContent = "Java"
+    nav.insertBefore(tabBtn, nav.lastElementChild)
+    on(tabBtn, "click", #(e)[ later(40, #[ hjuOpen() ]) ])
+
+    {pane} = make("section")
+    pane.id = "javatab"
+    pane.className = "audio-pane"
+    pane.setAttribute("aria-label", "Hash to Java")
+    dom("#main").appendChild(pane)
+
+    {scroll} = hjuAdd(pane, "div", "a-scroll", "")
+    {wrap} = hjuAdd(scroll, "div", "hju-wrap", "")
+
+    {top} = hjuAdd(wrap, "div", "hju-card", "")
+    hjuAdd(top, "div", "hju-h", "Hash to Java")
+    hjuAdd(top, "div", "hju-note", "Each ticked game tab becomes one Java file, named after the tab. This only makes text: your game keeps running on Abyss's own compiler.")
+    hjuTabBox = hjuAdd(top, "div", "", "")
+    {opt} = hjuAdd(top, "label", "hju-check", "")
+    hjuNotesBox = hjuAdd(opt, "input", "", "")
+    hjuNotesBox.type = "checkbox"
+    hjuNotesBox.checked = true
+    on(hjuNotesBox, "change", #(e)[ hjuNotes = hjuNotesBox.checked ])
+    hjuAdd(opt, "span", "", "Add a // line N note to every statement")
+    hjuAdd(opt, "small", "", "(shows where each Java line came from)")
+    {row} = hjuAdd(top, "div", "hju-row", "")
+    hjuMakeBtn = hjuButton(row, "Make Java", #(e)[ hjuMake() ])
+    hjuAllBtn = hjuButton(row, "Save all", #(e)[ hjuSaveAll() ])
+    hjuAllBtn.disabled = true
+    hjuMsg = hjuAdd(top, "div", "hju-note", "")
+    hjuMsg.style.marginTop = "8px"
+
+    hjuOutBox = hjuAdd(wrap, "div", "hju-wrap", "")
+    hjuOutBox.style.maxWidth = "none"
+  ]
+  true
+]
+
+{hjuInstalled} = hjuInstall()

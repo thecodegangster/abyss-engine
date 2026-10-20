@@ -1,0 +1,1437 @@
+//@ pack Hash to Java (compiler)
+//@ target compiler
+// A second compiler that turns Hash code into Java. It is NOT used to run Abyss Engine or your games: Abyss keeps
+// using its own Hash-to-JavaScript compiler. This one only makes Java text, for when the Hash should end up in a
+// Java program, for example code that runs on a robot.
+//
+//   Using it     hjvCompile(hashCode, className) gives a map: java (the Java file), className, pkg, file, meta.
+//                hjvRuntime(pkg) gives HashRuntime.java, the support code every generated file needs. Save both
+//                in the same folder. From the browser console: abyssEngine.compiler().c.hjvCompile("...", "Name").
+//                The "Hash to Java (UI)" pack adds a tab that does this for you.
+//   Errors       Problems are reported the way the Hash compiler reports them, with the line in your Hash.
+//   What works   Everything in the Hash language: variables, functions (also inside functions, passed around and
+//                called later), me-objects, maps, lists, text, % loops of every kind, @ tests, and the math, text,
+//                list and map built-ins. Calling Java: javaClass, javaNew and obj.method(...) on any Java object
+//                (Hash numbers become Doubles and turn into int, float or long where Java wants one, and text
+//                turns into an enum constant where Java wants an enum). Java only: tan, atan, asin, acos, sleep.
+//   What doesn't Drawing, sound, input, the screen, JSON, storing and the web page built-ins (drawRect, keyDown,
+//                synth, dom ...) don't exist in Java output. Using one is an error that says so. me at the very
+//                top of a file is not supported.
+//   Shape        Hash functions at the top become Java methods, top-level variables become fields, and the
+//                other top-level lines run from the entry point (main in a plain program). Values are Objects:
+//                numbers are Doubles, text is String, lists are ArrayList, maps and me-objects are HashObj.
+//                A variable that a function inside another function reads lives in a Ref cell (name.v).
+//                Every line ends with a note "// line N" naming the Hash line it came from.
+//   Targets      #hjvTarget says what kind of Java file comes out (plain program by default). Another pack can
+//                replace it to wrap the code in some other class, add built-ins and add imports. It gives
+//                pkg, isStatic, imports, reserved, builtins, classLine(cls, info), entry(info) and check(info).
+//                A built-in is a map with ret (num, bool, text, list or obj), emit(args) giving the Java text
+//                (args are the Java texts of the inputs), void (true when the Java has no result) and expr
+//                (true when the Java is not allowed as a statement on its own).
+//   Java version Generated code and HashRuntime.java only use Java 8 features.
+//
+// Dependencies: none. It uses the Compiler tab's own lex and parse, which are built in, and nothing from any other pack.
+// This pack only adds things (every name starts with hjv or HJV). It changes nothing about how Abyss compiles.
+
+// ===================================================================================================
+// Pass 1: work out what every name means (which are functions, which need a Ref cell, Java names).
+// ===================================================================================================
+
+// Words Java does not allow as names, plus names the generated code uses itself.
+{HJV_JAVA_WORDS} = list("abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue", "default", "do", "double", "else", "enum", "extends", "final", "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int", "interface", "long", "native", "new", "package", "private", "protected", "public", "return", "short", "static", "strictfp", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try", "void", "volatile", "while", "true", "false", "null", "var", "record", "yield", "sealed", "permits", "_")
+{HJV_USED_NAMES} = list("Ref", "HashFn", "HashObj", "HashError", "HashRuntime", "Loop", "Getter", "Setter", "Prop", "Object", "Double", "String", "Boolean", "Number", "Integer", "Math", "System", "Class", "List", "ArrayList", "Thread", "main", "toString", "equals", "hashCode", "getClass", "notify", "notifyAll", "wait", "clone", "finalize", "call", "truthy", "arg", "ignore", "me", "prop", "loop", "iter", "field", "setField", "invoke", "norm", "show", "kindOf", "javaClass", "javaNew")
+
+// What each built-in gives back: num, bool, text, list or obj. These all exist in HashRuntime.java.
+#hjvCoreBuiltins[
+  {t} = map()
+  %(list("add", "sub", "mul", "div", "mod", "min", "max", "abs", "floor", "ceil", "round", "sqrt", "pow", "sin", "cos", "atan2", "pi", "random", "number", "size", "find", "findLast", "time", "clock", "tan", "atan", "asin", "acos"), n)[ put(t, n, "num") ]
+  %(list("eq", "neq", "lt", "gt", "lte", "gte", "and", "or", "not", "has", "remove"), n)[ put(t, n, "bool") ]
+  %(list("join", "text", "lower", "upper", "quote", "joinList"), n)[ put(t, n, "text") ]
+  %(list("list", "keys", "split", "keep"), n)[ put(t, n, "list") ]
+  %(list("map", "slice", "get", "put", "push", "pop", "removeAt", "print", "fail", "sleep", "javaClass", "javaNew"), n)[ put(t, n, "obj") ]
+  t
+]
+
+// The built-ins this compile knows: the core ones plus whatever the target adds. Name -> {ret, emit, void}.
+#hjvBuiltinTable(tgt)[
+  {tbl} = map()
+  {core} = hjvCoreBuiltins()
+  %(keys(core), n)[
+    {d} = map()
+    d.ret = get(core, n)
+    d.emit = false
+    d.void = false
+    d.expr = false
+    put(tbl, n, d)
+  ]
+  %(keys(tgt.builtins), n)[
+    {d} = get(tgt.builtins, n)
+    @(not(has(d, "ret")))[ d.ret = "obj" ]
+    @(not(has(d, "emit")))[ d.emit = false ]
+    @(not(has(d, "void")))[ d.void = false ]
+    @(not(has(d, "expr")))[ d.expr = false ]
+    put(tbl, n, d)
+  ]
+  tbl
+]
+
+#hjvReservedMap(tgt)[
+  {r} = map()
+  %(HJV_JAVA_WORDS, w)[ put(r, w, true) ]
+  %(HJV_USED_NAMES, w)[ put(r, w, true) ]
+  %(keys(hjvCoreBuiltins()), w)[ put(r, w, true) ]
+  %(tgt.reserved, w)[ put(r, w, true) ]
+  %(keys(tgt.builtins), w)[ put(r, w, true) ]
+  r
+]
+
+#hjvNewCx(tgt, file)[
+  {cx} = map()
+  cx.tgt = tgt
+  cx.file = file
+  cx.lvl = 0
+  cx.n = 0
+  cx.reserved = hjvReservedMap(tgt)
+  cx.bi = hjvBuiltinTable(tgt)
+  cx.topNames = map()
+  cx.notes = true
+  cx
+]
+
+#hjvFail(cx, msg, nd)[
+  {l} = nd.line
+  {c} = nd.col
+  @(not(l))[ l = 1 ]
+  @(not(c))[ c = 1 ]
+  fail(msg, cx.file, l, c)
+]
+
+// A temporary Java name that cannot clash with anything the Hash code writes.
+#hjvTemp(cx, base)[
+  cx.n = add(cx.n, 1)
+  join("$", base, cx.n)
+]
+
+// The outermost scope: every built-in. Ones Abyss has but Java output does not are marked "nobuiltin".
+#hjvRoot(cx)[
+  {root} = scope(false, "root")
+  %(builtins(), n)[
+    {sy} = map()
+    sy.name = n
+    sy.kind = "nobuiltin"
+    sy.line = 0
+    sy.lvl = 0
+    sy.top = true
+    sy.ref = false
+    put(root.names, n, sy)
+  ]
+  %(keys(cx.bi), n)[
+    {sy} = map()
+    sy.name = n
+    sy.kind = "builtin"
+    sy.desc = get(cx.bi, n)
+    sy.line = 0
+    sy.lvl = 0
+    sy.top = true
+    sy.ref = false
+    put(root.names, n, sy)
+  ]
+  root
+]
+
+// Is this Java name already used by a variable in the surrounding scopes of the same function?
+#hjvTaken(sc, jn)[
+  {found} = false
+  {s} = sc
+  %(and(s, not(found)))[
+    @(or(eq(s.kind, "top"), eq(s.kind, "root")))[ s = false ][
+      %(keys(s.names), nm)[ @(eq(get(s.names, nm).jname, jn))[ found = true ] ]
+      s = s.parent
+    ]
+  ]
+  found
+]
+
+#hjvJName(cx, sc, name, isTop)[
+  {base} = name
+  @(has(cx.reserved, base))[ base = join(base, "_") ]
+  {jn} = base
+  {k} = 1
+  @(isTop)[
+    %(has(cx.topNames, jn))[
+      k = add(k, 1)
+      jn = join(base, "_", k)
+    ]
+    put(cx.topNames, jn, true)
+  ][
+    %(hjvTaken(sc, jn))[
+      k = add(k, 1)
+      jn = join(base, "_", k)
+    ]
+  ]
+  jn
+]
+
+#hjvDeclare(cx, sc, name, kind, nd)[
+  @(has(sc.names, name))[
+    {prev} = get(sc.names, name)
+    @(eq(prev.kind, "param"))[ hjvFail(cx, join("\"", name, "\" is already an input of this function. Pick another name."), nd) ]
+    hjvFail(cx, join("There's already something called \"", name, "\" here (line ", prev.line, "). To change it, write ", name, " = ... without the { }."), nd)
+  ]
+  {sy} = map()
+  sy.name = name
+  sy.kind = kind
+  sy.line = nd.line
+  sy.lvl = cx.lvl
+  sy.top = eq(sc.kind, "top")
+  sy.ref = false
+  sy.arity = 0
+  sy.jname = hjvJName(cx, sc, name, sy.top)
+  put(sc.names, name, sy)
+  sy
+]
+
+// "Did you mean ...?" like the Hash compiler does.
+#hjvSuggest(name, sc)[
+  {best} = false
+  {bestD} = 3
+  {limit} = max(1, floor(div(size(name), 3)))
+  %(allNames(sc), n)[
+    {dist} = editDistance(name, n)
+    @(and(lt(dist, bestD), lte(dist, limit)))[
+      best = n
+      bestD = dist
+    ]
+  ]
+  best
+]
+
+#hjvUnknown(cx, name, sc, nd)[
+  @(has(WORD_HINTS, name))[ hjvFail(cx, get(WORD_HINTS, name), nd) ]
+  {best} = hjvSuggest(name, sc)
+  @(best)[
+    hjvFail(cx, join("Abyss Engine doesn't know \"", name, "\". Did you mean \"", best, "\"?"), nd)
+  ]
+  hjvFail(cx, join("Abyss Engine doesn't know \"", name, "\". Make it first with {", name, "} = ... or #", name, "[ ... ]."), nd)
+]
+
+// A name is used. Says if it needs a Ref cell, and complains about built-ins Java output cannot do.
+#hjvUse(cx, nd, sc, asCall)[
+  {sy} = findName(sc, nd.name)
+  @(not(sy))[ hjvUnknown(cx, nd.name, sc, nd) ]
+  nd.sym = sy
+  @(eq(sy.kind, "nobuiltin"))[ hjvFail(cx, join("\"", nd.name, "\" works in Abyss games, but Java output doesn't have it. Java output has math, text, lists, maps, loops and functions, plus whatever the target adds."), nd) ]
+  @(and(not(asCall), eq(sy.kind, "builtin")))[ hjvFail(cx, join("\"", nd.name, "\" is built in, so Java output can only call it, not pass it around. Wrap it: #(x)[ ", nd.name, "(x) ]."), nd) ]
+  @(not(sy.top))[ @(gt(cx.lvl, sy.lvl))[ sy.ref = true ] ]
+  sy
+]
+
+// What kind of value does an expression give? bool, num, text, list, fn or obj (anything else).
+#hjvKind(e)[
+  {k} = e.k
+  {r} = "obj"
+  @(eq(k, "bool"))[ r = "bool" ]
+  @(eq(k, "num"))[ r = "num" ]
+  @(eq(k, "str"))[ r = "text" ]
+  @(eq(k, "lambda"))[ r = "fn" ]
+  @(eq(k, "call"))[
+    @(eq(e.fn.k, "id"))[
+      {sy} = e.fn.sym
+      @(eq(sy.kind, "builtin"))[ r = sy.desc.ret ]
+    ]
+  ]
+  r
+]
+
+// Marks every variable an expression reads as a Ref, for expressions Java will run inside a lambda.
+#hjvMarkRefs(e)[
+  {k} = e.k
+  @(eq(k, "id"))[ @(not(e.sym.top))[ e.sym.ref = true ] ]
+  @(eq(k, "call"))[
+    hjvMarkRefs(e.fn)
+    %(e.args, a)[ hjvMarkRefs(a) ]
+  ]
+  @(eq(k, "member"))[ hjvMarkRefs(e.obj) ]
+  true
+]
+
+#hjvResolveFn(cx, nd, params, body, sc)[
+  cx.lvl = add(cx.lvl, 1)
+  {fs} = scope(sc, "fn")
+  nd.lvl = cx.lvl
+  nd.psyms = list()
+  %(params, p)[ push(nd.psyms, hjvDeclare(cx, fs, p, "param", nd)) ]
+  hjvResolveBody(cx, body, fs)
+  cx.lvl = sub(cx.lvl, 1)
+]
+
+#hjvResolveMe(cx, e, sc)[
+  {o} = sc
+  %(eq(o.kind, "block"))[ o = o.parent ]
+  @(or(eq(o.kind, "top"), eq(o.kind, "root")))[ hjvFail(cx, "me at the very top of a file can't be turned into Java. Use it inside a function.", e) ]
+  e.syms = list()
+  %(keys(o.names), nm)[
+    {sy} = get(o.names, nm)
+    sy.ref = true
+    push(e.syms, sy)
+  ]
+]
+
+#hjvResolveExpr(cx, e, sc)[
+  {k} = e.k
+  @(eq(k, "id"))[ hjvUse(cx, e, sc, false) ]
+  @(eq(k, "call"))[
+    @(eq(e.fn.k, "id"))[ hjvUse(cx, e.fn, sc, true) ][ hjvResolveExpr(cx, e.fn, sc) ]
+    %(e.args, a)[ hjvResolveExpr(cx, a, sc) ]
+  ]
+  @(eq(k, "member"))[ hjvResolveExpr(cx, e.obj, sc) ]
+  @(eq(k, "lambda"))[ hjvResolveFn(cx, e, e.params, e.body, sc) ]
+  @(eq(k, "me"))[ hjvResolveMe(cx, e, sc) ]
+  true
+]
+
+#hjvResolveAssign(cx, s, sc)[
+  {t} = s.target
+  @(eq(t.k, "id"))[
+    {sy} = findName(sc, t.name)
+    @(sy)[
+      @(eq(sy.kind, "builtin"))[ hjvFail(cx, join("\"", t.name, "\" is built into Abyss Engine and can't be changed. Use a different name for your own."), t) ]
+      @(and(eq(sy.kind, "fn"), sy.top))[ hjvFail(cx, join("\"", t.name, "\" is a function, and Java output can't swap it for something else. Make a variable instead."), t) ]
+    ]
+    @(not(sy))[
+      {best} = hjvSuggest(t.name, sc)
+      @(best)[ hjvFail(cx, join("\"", t.name, "\" doesn't exist. Did you mean \"", best, "\"?"), t) ]
+      hjvFail(cx, join("\"", t.name, "\" doesn't exist yet. To make it, write {", t.name, "} = ..."), t)
+    ]
+    hjvUse(cx, t, sc, false)
+  ][ hjvResolveExpr(cx, t.obj, sc) ]
+  hjvResolveExpr(cx, s.value, sc)
+]
+
+#hjvResolveLoop(cx, s, sc)[
+  hjvResolveExpr(cx, s.over, sc)
+  {kind} = hjvKind(s.over)
+  s.lk = "dyn"
+  @(eq(kind, "bool"))[ s.lk = "bool" ]
+  @(eq(kind, "num"))[ s.lk = "num" ]
+  @(or(eq(kind, "list"), eq(kind, "text")))[ s.lk = "list" ]
+  // A test Java cannot classify ahead of time runs inside a lambda, so what it reads must be Refs.
+  @(eq(s.lk, "dyn"))[ hjvMarkRefs(s.over) ]
+  {bs} = scope(sc, "block")
+  s.sym = false
+  @(s.name)[ s.sym = hjvDeclare(cx, bs, s.name, "var", s) ]
+  hjvResolveBody(cx, s.body, bs)
+]
+
+#hjvResolveStmt(cx, s, sc)[
+  {k} = s.k
+  @(eq(k, "decl"))[ @(s.value)[ hjvResolveExpr(cx, s.value, sc) ] ]
+  @(eq(k, "fn"))[ hjvResolveFn(cx, s, s.params, s.body, sc) ]
+  @(eq(k, "if"))[
+    hjvResolveExpr(cx, s.cond, sc)
+    hjvResolveBody(cx, s.then, scope(sc, "block"))
+    @(s.els)[ hjvResolveBody(cx, s.els, scope(sc, "block")) ]
+  ]
+  @(eq(k, "loop"))[ hjvResolveLoop(cx, s, sc) ]
+  @(eq(k, "assign"))[ hjvResolveAssign(cx, s, sc) ]
+  @(eq(k, "expr"))[ hjvResolveExpr(cx, s.e, sc) ]
+  true
+]
+
+// Declares every name in a scope first (Hash lets functions use names declared further down), then looks inside.
+#hjvResolveBody(cx, stmts, sc)[
+  %(stmts, s)[
+    @(eq(s.k, "decl"))[ s.sym = hjvDeclare(cx, sc, s.name, "var", s) ]
+    @(eq(s.k, "fn"))[
+      s.sym = hjvDeclare(cx, sc, s.name, "fn", s)
+      s.sym.arity = size(s.params)
+      // A function inside another one lives in a Ref, so it can call itself and the ones after it.
+      @(not(s.sym.top))[ s.sym.ref = true ]
+    ]
+  ]
+  %(stmts, s)[ hjvResolveStmt(cx, s, sc) ]
+  true
+]
+
+// ===================================================================================================
+// Pass 2: write the Java.
+// ===================================================================================================
+
+{HJV_SPACES} = "                                                                                "
+
+#hjvInd(d)[ slice(HJV_SPACES, 0, mul(d, 4)) ]
+
+#hjvNote(cx, s)[ @(cx.notes)[ join("  // line ", s.line) ][ "" ] ]
+
+#hjvJoinArgs(parts)[ joinList(parts, ", ") ]
+
+#hjvTrim(t)[
+  {a} = 0
+  {b} = size(t)
+  %(and(lt(a, b), has(" \t\r", slice(t, a, add(a, 1)))))[ a = add(a, 1) ]
+  %(and(gt(b, a), has(" \t\r", slice(t, sub(b, 1), b))))[ b = sub(b, 1) ]
+  slice(t, a, b)
+]
+
+// A number as a Java double: every Hash number is a double.
+#hjvNum(t)[
+  {neg} = eq(slice(t, 0, 1), "-")
+  @(neg)[ t = slice(t, 1, size(t)) ]
+  %(and(gt(size(t), 1), eq(slice(t, 0, 1), "0"), neq(slice(t, 1, 2), ".")))[ t = slice(t, 1, size(t)) ]
+  @(not(has(t, ".")))[ t = join(t, ".0") ]
+  @(neg)[ join("-", t) ][ t ]
+]
+
+// The Java for a test: Hash counts 0, "", nothing and false as no.
+#hjvCond(cx, e, d)[
+  {c} = hjvEx(cx, e, d)
+  @(eq(hjvKind(e), "bool"))[ c ][ join("truthy(", c, ")") ]
+]
+
+#hjvIdRead(cx, e)[
+  {sy} = e.sym
+  {out} = sy.jname
+  @(eq(sy.kind, "fn"))[
+    @(sy.top)[
+      {pieces} = list()
+      %(sy.arity, i)[ push(pieces, join("arg($f, ", i, ")")) ]
+      out = join("((HashFn) $f -> ", sy.jname, "(", hjvJoinArgs(pieces), "))")
+    ][ out = join(sy.jname, ".v") ]
+  ][
+    @(sy.ref)[ out = join(sy.jname, ".v") ]
+  ]
+  out
+]
+
+// me hands back everything a function declared, as an object whose fields read and write the variables.
+#hjvMeCode(cx, e)[
+  {pieces} = list()
+  %(e.syms, sy)[
+    push(pieces, join(quote(sy.name), ", prop(() -> ", sy.jname, ".v, $v -> ", sy.jname, ".v = $v)"))
+  ]
+  join("me(", hjvJoinArgs(pieces), ")")
+]
+
+#hjvLambdaCore(cx, nd, d)[
+  join("(HashFn) ", join("$a", nd.lvl), " -> {\n", hjvFnBody(cx, nd, add(d, 1), "lambda"), hjvInd(d), "}")
+]
+
+#hjvCallId(cx, e, f, args)[
+  {sy} = f.sym
+  {out} = ""
+  @(eq(sy.kind, "builtin"))[
+    {max} = -1
+    @(has(sy.desc, "arity"))[ max = get(sy.desc, "arity") ]
+    @(and(gte(max, 0), gt(size(args), max)))[
+      {plural} = "s"
+      @(eq(max, 1))[ plural = "" ]
+      hjvFail(cx, join("\"", f.name, "\" takes ", max, " input", plural, ", but this gives it ", size(args), "."), e)
+    ]
+    @(sy.desc.emit)[ out = sy.desc.emit(args) ][ out = join(f.name, "(", hjvJoinArgs(args), ")") ]
+  ]
+  @(and(eq(sy.kind, "fn"), sy.top))[
+    {n} = sy.arity
+    @(gt(size(args), n))[
+      {plural} = "s"
+      @(eq(n, 1))[ plural = "" ]
+      hjvFail(cx, join("\"", f.name, "\" takes ", n, " input", plural, ", but this gives it ", size(args), "."), e)
+    ]
+    {full} = list()
+    %(args, a)[ push(full, a) ]
+    %(sub(n, size(args)))[ push(full, "null") ]
+    out = join(sy.jname, "(", hjvJoinArgs(full), ")")
+  ]
+  @(neq(sy.kind, "builtin"))[
+    @(not(and(eq(sy.kind, "fn"), sy.top)))[
+      {all} = list(hjvIdRead(cx, f))
+      %(args, a)[ push(all, a) ]
+      out = join("call(", hjvJoinArgs(all), ")")
+    ]
+  ]
+  out
+]
+
+#hjvCall(cx, e, d)[
+  {f} = e.fn
+  {args} = list()
+  %(e.args, a)[ push(args, hjvEx(cx, a, d)) ]
+  {out} = ""
+  @(eq(f.k, "member"))[
+    {all} = list(hjvEx(cx, f.obj, d), quote(f.name))
+    %(args, a)[ push(all, a) ]
+    out = join("invoke(", hjvJoinArgs(all), ")")
+  ]
+  @(eq(f.k, "id"))[ out = hjvCallId(cx, e, f, args) ]
+  @(and(neq(f.k, "member"), neq(f.k, "id")))[
+    {all2} = list(hjvEx(cx, f, d))
+    %(args, a)[ push(all2, a) ]
+    out = join("call(", hjvJoinArgs(all2), ")")
+  ]
+  out
+]
+
+#hjvEx(cx, e, d)[
+  {k} = e.k
+  {out} = "null"
+  @(eq(k, "num"))[ out = hjvNum(e.v) ]
+  @(eq(k, "str"))[ out = quote(e.v) ]
+  @(eq(k, "bool"))[ @(e.v)[ out = "true" ][ out = "false" ] ]
+  @(eq(k, "id"))[ out = hjvIdRead(cx, e) ]
+  @(eq(k, "me"))[ out = hjvMeCode(cx, e) ]
+  @(eq(k, "lambda"))[ out = hjvLambdaCore(cx, e, d) ]
+  @(eq(k, "member"))[ out = join("field(", hjvEx(cx, e.obj, d), ", ", quote(e.name), ")") ]
+  @(eq(k, "call"))[ out = hjvCall(cx, e, d) ]
+  out
+]
+
+// ----- statements: each gives a map with code (whole lines) and ret (true if every path returns) -----
+
+#hjvDeclCode(cx, s, d)[
+  {sy} = s.sym
+  {v} = "null"
+  @(s.value)[ v = hjvEx(cx, s.value, d) ]
+  {line} = ""
+  @(sy.top)[ line = join(sy.jname, " = ", v, ";") ][
+    @(sy.ref)[ line = join(sy.jname, ".v = ", v, ";") ][
+      line = join("Object ", sy.jname, " = ", v, ";")
+    ]
+  ]
+  join(hjvInd(d), line, hjvNote(cx, s), "\n")
+]
+
+#hjvAssignCode(cx, s, d)[
+  {t} = s.target
+  {v} = hjvEx(cx, s.value, d)
+  {line} = ""
+  @(eq(t.k, "id"))[
+    {sy} = t.sym
+    @(sy.ref)[ line = join(sy.jname, ".v = ", v, ";") ][ line = join(sy.jname, " = ", v, ";") ]
+  ][
+    line = join("setField(", hjvEx(cx, t.obj, d), ", ", quote(t.name), ", ", v, ");")
+  ]
+  join(hjvInd(d), line, hjvNote(cx, s), "\n")
+]
+
+#hjvExprCode(cx, s, d, tail, r)[
+  {e} = s.e
+  {code} = hjvEx(cx, e, d)
+  {ind} = hjvInd(d)
+  {note} = hjvNote(cx, s)
+  {isVoid} = false
+  {isExpr} = false
+  @(eq(e.k, "call"))[
+    @(eq(e.fn.k, "id"))[
+      @(eq(e.fn.sym.kind, "builtin"))[
+        isVoid = e.fn.sym.desc.void
+        isExpr = e.fn.sym.desc.expr
+      ]
+    ]
+  ]
+  @(tail)[
+    r.ret = true
+    @(isVoid)[ r.code = join(ind, code, ";", note, "\n", ind, "return null;\n") ][
+      r.code = join(ind, "return ", code, ";", note, "\n")
+    ]
+  ][
+    @(and(eq(e.k, "call"), not(isExpr)))[ r.code = join(ind, code, ";", note, "\n") ][
+      @(or(eq(e.k, "id"), eq(e.k, "num"), eq(e.k, "str"), eq(e.k, "bool")))[ r.code = "" ][
+        r.code = join(ind, "ignore(", code, ");", note, "\n")
+      ]
+    ]
+  ]
+  r
+]
+
+#hjvIfCode(cx, s, d, tail, r)[
+  {ind} = hjvInd(d)
+  {c} = hjvCond(cx, s.cond, d)
+  {th} = hjvBody(cx, s.then, add(d, 1), tail)
+  {code} = join(ind, "if (", c, ") {", hjvNote(cx, s), "\n", th.code)
+  r.ret = false
+  @(s.els)[
+    {el} = hjvBody(cx, s.els, add(d, 1), tail)
+    code = join(code, ind, "} else {\n", el.code, ind, "}\n")
+    r.ret = and(th.ret, el.ret)
+  ][
+    code = join(code, ind, "}\n")
+  ]
+  r.code = code
+  r
+]
+
+#hjvLoopVar(sy, value, d)[
+  @(sy.ref)[ join(hjvInd(d), "final Ref ", sy.jname, " = new Ref(", value, ");\n") ][
+    join(hjvInd(d), "Object ", sy.jname, " = ", value, ";\n")
+  ]
+]
+
+#hjvLoopCode(cx, s, d)[
+  {ind} = hjvInd(d)
+  {lk} = s.lk
+  {sy} = s.sym
+  {over} = hjvEx(cx, s.over, d)
+  {pre} = ""
+  {head} = ""
+  {first} = ""
+  @(eq(lk, "bool"))[
+    @(sy)[
+      {kv} = hjvTemp(cx, "k")
+      head = join("for (int ", kv, " = 0; ", over, "; ", kv, "++) {")
+      first = hjvLoopVar(sy, join("(double) ", kv), add(d, 1))
+    ][
+      head = join("while (", over, ") {")
+    ]
+  ]
+  @(eq(lk, "num"))[
+    {nv} = hjvTemp(cx, "n")
+    {iv} = hjvTemp(cx, "i")
+    pre = join(ind, "double ", nv, " = ", over, ";\n")
+    head = join("for (int ", iv, " = 0; ", iv, " < ", nv, "; ", iv, "++) {")
+    @(sy)[ first = hjvLoopVar(sy, join("(double) ", iv), add(d, 1)) ]
+  ]
+  @(eq(lk, "list"))[
+    @(and(sy, not(sy.ref)))[
+      head = join("for (Object ", sy.jname, " : iter(", over, ")) {")
+    ][
+      {ev} = hjvTemp(cx, "e")
+      head = join("for (Object ", ev, " : iter(", over, ")) {")
+      @(sy)[ first = hjvLoopVar(sy, ev, add(d, 1)) ]
+    ]
+  ]
+  @(eq(lk, "dyn"))[
+    {lv} = hjvTemp(cx, "L")
+    head = join("for (Loop ", lv, " = loop(() -> ", over, "); ", lv, ".next(); ) {")
+    @(sy)[ first = hjvLoopVar(sy, join(lv, ".cur()"), add(d, 1)) ]
+  ]
+  {b} = hjvBody(cx, s.body, add(d, 1), false)
+  join(pre, ind, head, hjvNote(cx, s), "\n", first, b.code, ind, "}\n")
+]
+
+#hjvStmt(cx, s, d, tail)[
+  {r} = map()
+  r.code = ""
+  r.ret = false
+  {k} = s.k
+  @(eq(k, "decl"))[ r.code = hjvDeclCode(cx, s, d) ]
+  @(eq(k, "assign"))[ r.code = hjvAssignCode(cx, s, d) ]
+  @(eq(k, "expr"))[ hjvExprCode(cx, s, d, tail, r) ]
+  @(eq(k, "if"))[ hjvIfCode(cx, s, d, tail, r) ]
+  @(eq(k, "loop"))[ r.code = hjvLoopCode(cx, s, d) ]
+  r
+]
+
+// A function declared inside another one: a lambda kept in its Ref.
+#hjvLocalFn(cx, s, d)[
+  join(hjvInd(d), s.sym.jname, ".v = ", hjvLambdaCore(cx, s, d), ";", hjvNote(cx, s), "\n")
+]
+
+// The statements of one block. Ref cells and inner functions come first, because Hash lets code use them before they are written.
+#hjvBody(cx, stmts, d, tail)[
+  {parts} = list()
+  {ind} = hjvInd(d)
+  %(stmts, s)[
+    @(or(eq(s.k, "decl"), eq(s.k, "fn")))[
+      @(and(s.sym.ref, not(s.sym.top)))[ push(parts, join(ind, "final Ref ", s.sym.jname, " = new Ref();\n")) ]
+    ]
+  ]
+  %(stmts, s)[
+    @(eq(s.k, "fn"))[ @(not(s.sym.top))[ push(parts, hjvLocalFn(cx, s, d)) ] ]
+  ]
+  {lastI} = sub(size(stmts), 1)
+  {ret} = false
+  %(size(stmts), i)[
+    {st} = get(stmts, i)
+    @(neq(st.k, "fn"))[
+      {r} = hjvStmt(cx, st, d, and(tail, eq(i, lastI)))
+      push(parts, r.code)
+      @(eq(i, lastI))[ ret = r.ret ]
+    ]
+  ]
+  {res} = map()
+  res.code = joinList(parts, "")
+  res.ret = ret
+  res
+]
+
+// What goes inside a function: copies of inputs that need a Ref, the statements, and a final return.
+#hjvFnBody(cx, nd, d, mode)[
+  {parts} = list()
+  {ind} = hjvInd(d)
+  {an} = join("$a", nd.lvl)
+  %(size(nd.psyms), i)[
+    {sy} = get(nd.psyms, i)
+    {src} = join(sy.jname, "_in")
+    @(eq(mode, "lambda"))[ src = join("arg(", an, ", ", i, ")") ]
+    @(sy.ref)[ push(parts, join(ind, "final Ref ", sy.jname, " = new Ref(", src, ");\n")) ][
+      @(eq(mode, "lambda"))[ push(parts, join(ind, "Object ", sy.jname, " = ", src, ";\n")) ]
+    ]
+  ]
+  {b} = hjvBody(cx, nd.body, d, true)
+  push(parts, b.code)
+  @(not(b.ret))[ push(parts, join(ind, "return null;\n")) ]
+  joinList(parts, "")
+]
+
+#hjvMethod(cx, s)[
+  {sy} = s.sym
+  {ps} = list()
+  %(s.psyms, p)[
+    @(p.ref)[ push(ps, join("Object ", p.jname, "_in")) ][ push(ps, join("Object ", p.jname)) ]
+  ]
+  {st} = ""
+  @(cx.tgt.isStatic)[ st = "static " ]
+  join("    ", st, "Object ", sy.jname, "(", joinList(ps, ", "), ") {", hjvNote(cx, s), "\n", hjvFnBody(cx, s, 2, "method"), "    }\n")
+]
+
+// ===================================================================================================
+// The front door
+// ===================================================================================================
+
+{HJV_VERSION} = 1
+
+// The target decides what kind of Java file comes out. This one is a plain program with a main.
+// Packs for other targets (like robots) replace this function.
+#hjvTarget[
+  {t} = map()
+  t.name = "plain"
+  t.pkg = "hashjava"
+  t.isStatic = true
+  t.imports = list()
+  t.reserved = list()
+  t.builtins = map()
+  t.classLine = #(cls, info)[ join("public class ", cls) ]
+  t.entry = #(info)[ join("    public static void main(String[] args) {\n", info.init, "    }\n") ]
+  t.check = #(info)[ true ]
+  t
+]
+
+// A name that works as a Java class name.
+#hjvClassName(raw)[
+  {out} = ""
+  {letters} = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"
+  %(size(raw), i)[
+    {ch} = slice(raw, i, add(i, 1))
+    @(has(letters, ch))[ out = join(out, ch) ]
+    @(eq(ch, " "))[ out = join(out, "_") ]
+  ]
+  @(not(size(out)))[ out = "Program" ]
+  @(has("0123456789", slice(out, 0, 1)))[ out = join("_", out) ]
+  join(upper(slice(out, 0, 1)), slice(out, 1, size(out)))
+]
+
+// The //@ lines of the Hash code, for targets that read settings from them. Each is a map with line and text.
+#hjvMeta(src)[
+  {out} = list()
+  {rows} = split(src, "\n")
+  %(size(rows), i)[
+    {t} = hjvTrim(get(rows, i))
+    @(eq(slice(t, 0, 3), "//@"))[
+      {m} = map()
+      m.line = add(i, 1)
+      m.text = hjvTrim(slice(t, 3, size(t)))
+      push(out, m)
+    ]
+  ]
+  out
+]
+
+// Turns Hash code into a Java file. Gives a map with java (the text), className, pkg, file, meta.
+// className names the class (a tab name is fine), and file names the Hash code in error messages.
+// opts is optional: a map where notes = false leaves out the "// line N" notes.
+#hjvCompile(src, className, file, opts)[
+  {cname} = hjvClassName(className)
+  @(not(file))[ file = join(cname, ".hash") ]
+  {tgt} = hjvTarget()
+  {cx} = hjvNewCx(tgt, file)
+  @(opts)[ @(has(opts, "notes"))[ cx.notes = get(opts, "notes") ] ]
+  {prog} = parse(lex(src, file), file)
+  {top} = scope(hjvRoot(cx), "top")
+  hjvResolveBody(cx, prog, top)
+
+  {fields} = list()
+  {methods} = list()
+  {initStmts} = list()
+  {fns} = map()
+  {st} = ""
+  @(tgt.isStatic)[ st = "static " ]
+  %(prog, s)[
+    @(eq(s.k, "decl"))[
+      push(fields, join("    ", st, "Object ", s.sym.jname, ";\n"))
+      push(initStmts, s)
+    ]
+    @(eq(s.k, "fn"))[
+      push(methods, hjvMethod(cx, s))
+      put(fns, s.name, s.sym)
+    ]
+    @(and(neq(s.k, "decl"), neq(s.k, "fn")))[ push(initStmts, s) ]
+  ]
+
+  {info} = map()
+  info.className = cname
+  info.file = file
+  info.pkg = tgt.pkg
+  info.fns = fns
+  info.meta = hjvMeta(src)
+  info.init = hjvBody(cx, initStmts, 2, false).code
+  info.cx = cx
+  tgt.check(info)
+
+  {out} = list()
+  push(out, join("// Made by the Hash to Java compiler (an Abyss Engine pack) from ", file, ".\n"))
+  push(out, "// Needs HashRuntime.java in the same folder. To change this program, change the Hash and make it again.\n")
+  push(out, join("package ", tgt.pkg, ";\n\n"))
+  push(out, join("import static ", tgt.pkg, ".HashRuntime.*;\n"))
+  %(tgt.imports, im)[ push(out, join(im, "\n")) ]
+  push(out, "\n")
+  push(out, join(tgt.classLine(cname, info), " {\n"))
+  @(size(fields))[ push(out, join(joinList(fields, ""), "\n")) ]
+  %(methods, m)[ push(out, join(m, "\n")) ]
+  push(out, tgt.entry(info))
+  push(out, "}\n")
+
+  {res} = map()
+  res.java = joinList(out, "")
+  res.className = cname
+  res.pkg = tgt.pkg
+  res.file = join(cname, ".java")
+  res.meta = info.meta
+  res
+]
+
+// HashRuntime.java: the support code every generated file needs. Put it next to the generated files.
+#hjvRuntime(pkg)[
+  joinList(split(hjvRuntimeSource(), "__PKG__"), pkg)
+]
+
+// The package the target wants its files in.
+#hjvPackage[ hjvTarget().pkg ]
+
+// The text of HashRuntime.java (the __PKG__ in it is replaced with the package).
+#hjvRuntimeSource[
+  {r} = list()
+  push(r, "package __PKG__;")
+  push(r, "")
+  push(r, "import java.lang.reflect.Array;")
+  push(r, "import java.lang.reflect.Constructor;")
+  push(r, "import java.lang.reflect.Field;")
+  push(r, "import java.lang.reflect.Method;")
+  push(r, "import java.lang.reflect.Modifier;")
+  push(r, "import java.util.ArrayList;")
+  push(r, "import java.util.LinkedHashMap;")
+  push(r, "import java.util.List;")
+  push(r, "import java.util.Map;")
+  push(r, "")
+  push(r, "/**")
+  push(r, " * Support code for Java made by the Hash to Java compiler (an Abyss Engine pack).")
+  push(r, " * Hash's built-in functions live here, so the generated code reads like the Hash it came from.")
+  push(r, " * Keep this file in the same folder (package) as the generated classes.")
+  push(r, " * Numbers are Doubles, text is String, true/false is Boolean, lists are ArrayList, maps and me-objects are HashObj.")
+  push(r, " */")
+  push(r, "public final class HashRuntime {")
+  push(r, "    private HashRuntime() {}")
+  push(r, "")
+  push(r, "    // ---------------------------------------------------------------- value kinds")
+  push(r, "")
+  push(r, "    /** A Hash function value. Missing inputs arrive as null, like Hash. */")
+  push(r, "    public interface HashFn { Object call(Object... args); }")
+  push(r, "")
+  push(r, "    /** Small helper interfaces (no java.util.function, so old Android is fine). */")
+  push(r, "    public interface Getter { Object get(); }")
+  push(r, "    public interface Setter { void set(Object v); }")
+  push(r, "")
+  push(r, "    /** A variable that an inner function or a me-object can reach. */")
+  push(r, "    public static final class Ref {")
+  push(r, "        public Object v;")
+  push(r, "        public Ref() {}")
+  push(r, "        public Ref(Object v) { this.v = v; }")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    /** Raised by fail() and by every Hash built-in that is used wrongly. */")
+  push(r, "    public static final class HashError extends RuntimeException {")
+  push(r, "        private static final long serialVersionUID = 1L;")
+  push(r, "        public final String file; public final int line; public final int col;")
+  push(r, "        public HashError(String msg) { this(msg, \"game\", 1, 1); }")
+  push(r, "        public HashError(String msg, String file, int line, int col) { super(msg); this.file = file; this.line = line; this.col = col; }")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    /** A variable seen from outside, inside a me-object. */")
+  push(r, "    public static final class Prop {")
+  push(r, "        final Getter get; final Setter set;")
+  push(r, "        Prop(Getter g, Setter s) { get = g; set = s; }")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    /** Hash maps and me-objects: text keys with values, in the order they were made. */")
+  push(r, "    public static final class HashObj {")
+  push(r, "        final LinkedHashMap<String, Object> m = new LinkedHashMap<String, Object>();")
+  push(r, "        public Object get(String k) { Object v = m.get(k); return v instanceof Prop ? ((Prop) v).get.get() : v; }")
+  push(r, "        public void set(String k, Object v) {")
+  push(r, "            Object old = m.get(k);")
+  push(r, "            if (old instanceof Prop) ((Prop) old).set.set(v); else m.put(k, v);")
+  push(r, "        }")
+  push(r, "        public boolean has(String k) { return m.containsKey(k); }")
+  push(r, "        public List<Object> keys() { return new ArrayList<Object>(m.keySet()); }")
+  push(r, "        public int size() { return m.size(); }")
+  push(r, "        @Override public String toString() { return show(this); }")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    // ---------------------------------------------------------------- start-up helpers used by generated code")
+  push(r, "")
+  push(r, "    public static Prop prop(Getter g, Setter s) { return new Prop(g, s); }")
+  push(r, "")
+  push(r, "    /** A me-object: names and props in pairs. */")
+  push(r, "    public static HashObj me(Object... kv) {")
+  push(r, "        HashObj o = new HashObj();")
+  push(r, "        for (int i = 0; i + 1 < kv.length; i += 2) o.m.put((String) kv[i], kv[i + 1]);")
+  push(r, "        return o;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    public static Object arg(Object[] a, int i) { return i < a.length ? a[i] : null; }")
+  push(r, "")
+  push(r, "    /** Runs an expression for what it does and drops its result. */")
+  push(r, "    public static void ignore(Object... v) {}")
+  push(r, "")
+  push(r, "    public static boolean truthy(Object v) {")
+  push(r, "        if (v == null) return false;")
+  push(r, "        if (v instanceof Boolean) return (Boolean) v;")
+  push(r, "        if (v instanceof Number) { double d = ((Number) v).doubleValue(); return d != 0 && !Double.isNaN(d); }")
+  push(r, "        if (v instanceof String) return ((String) v).length() > 0;")
+  push(r, "        return true;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    public static Object call(Object f, Object... args) {")
+  push(r, "        if (f instanceof HashFn) return norm(((HashFn) f).call(args));")
+  push(r, "        throw new HashError(kindOf(f) + \" isn't a function, so it can't be called with ( ).\");")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    // ---------------------------------------------------------------- loops")
+  push(r, "")
+  push(r, "    /** The three kinds of Hash loop: %(number), %(list or text) and %(test). */")
+  push(r, "    public static final class Loop {")
+  push(r, "        private final Getter f;")
+  push(r, "        private Object v;")
+  push(r, "        private int kind;          // 0 count, 1 items, 2 test")
+  push(r, "        private int i;")
+  push(r, "        private double n;")
+  push(r, "        private List<Object> items;")
+  push(r, "        private Object cur;")
+  push(r, "        Loop(Getter f) {")
+  push(r, "            this.f = f; this.v = f.get();")
+  push(r, "            if (v instanceof Number) { kind = 0; n = ((Number) v).doubleValue(); }")
+  push(r, "            else if (v instanceof List || v instanceof String) { kind = 1; items = iter(v); }")
+  push(r, "            else if (v instanceof Boolean) { kind = 2; }")
+  push(r, "            else throw new HashError(\"% needs a number, a list or a true/false test, but got \" + kindOf(v) + \".\");")
+  push(r, "        }")
+  push(r, "        /** Moves to the next pass. Tests are asked again before every pass but the first. */")
+  push(r, "        public boolean next() {")
+  push(r, "            if (kind == 0) { if (i < n) { cur = (double) i++; return true; } return false; }")
+  push(r, "            if (kind == 1) { if (i < items.size()) { cur = items.get(i++); return true; } return false; }")
+  push(r, "            if (i > 0) v = f.get();")
+  push(r, "            if (!truthy(v)) return false;")
+  push(r, "            cur = (double) i++;")
+  push(r, "            return true;")
+  push(r, "        }")
+  push(r, "        public Object cur() { return cur; }")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    public static Loop loop(Getter f) { return new Loop(f); }")
+  push(r, "")
+  push(r, "    /** The things a % loop goes through: a copy of a list, or the letters of some text. */")
+  push(r, "    @SuppressWarnings(\"unchecked\")")
+  push(r, "    public static List<Object> iter(Object v) {")
+  push(r, "        if (v instanceof List) return new ArrayList<Object>((List<Object>) v);")
+  push(r, "        if (v instanceof String) {")
+  push(r, "            String s = (String) v; List<Object> out = new ArrayList<Object>();")
+  push(r, "            for (int i = 0; i < s.length(); i++) out.add(String.valueOf(s.charAt(i)));")
+  push(r, "            return out;")
+  push(r, "        }")
+  push(r, "        throw new HashError(\"% needs a number, a list or a true/false test, but got \" + kindOf(v) + \".\");")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    // ---------------------------------------------------------------- showing values")
+  push(r, "")
+  push(r, "    public static String kindOf(Object v) {")
+  push(r, "        if (v == null) return \"nothing\";")
+  push(r, "        if (v instanceof Number) return \"the number \" + show(v);")
+  push(r, "        if (v instanceof String) return \"the text \\\"\" + v + \"\\\"\";")
+  push(r, "        if (v instanceof Boolean) return ((Boolean) v) ? \"true\" : \"false\";")
+  push(r, "        if (v instanceof List) return \"a list\";")
+  push(r, "        if (v instanceof HashFn) return \"a function\";")
+  push(r, "        return \"an object\";")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    public static String show(Object v) { return show(v, 0); }")
+  push(r, "")
+  push(r, "    @SuppressWarnings(\"unchecked\")")
+  push(r, "    private static String show(Object v, int depth) {")
+  push(r, "        if (v instanceof Number) return showNumber(((Number) v).doubleValue());")
+  push(r, "        if (v instanceof String) return depth > 0 ? quote(v) : (String) v;")
+  push(r, "        if (v == null) return \"nothing\";")
+  push(r, "        if (v instanceof HashFn) return \"#function\";")
+  push(r, "        if (v instanceof List) {")
+  push(r, "            if (depth > 2) return \"list(...)\";")
+  push(r, "            StringBuilder b = new StringBuilder(\"list(\");")
+  push(r, "            boolean first = true;")
+  push(r, "            for (Object x : (List<Object>) v) { if (!first) b.append(\", \"); first = false; b.append(show(x, depth + 1)); }")
+  push(r, "            return b.append(\")\").toString();")
+  push(r, "        }")
+  push(r, "        if (v instanceof HashObj) {")
+  push(r, "            if (depth > 2) return \"{...}\";")
+  push(r, "            StringBuilder b = new StringBuilder(\"{\");")
+  push(r, "            boolean first = true;")
+  push(r, "            HashObj o = (HashObj) v;")
+  push(r, "            for (String k : o.m.keySet()) {")
+  push(r, "                Object x = o.get(k);")
+  push(r, "                if (x instanceof HashFn) continue;")
+  push(r, "                if (!first) b.append(\", \"); first = false;")
+  push(r, "                b.append(k).append(\": \").append(show(x, depth + 1));")
+  push(r, "            }")
+  push(r, "            return b.append(\"}\").toString();")
+  push(r, "        }")
+  push(r, "        return String.valueOf(v);")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    /** Numbers print like Hash: whole numbers without .0, and at most 6 decimals. */")
+  push(r, "    static String showNumber(double d) {")
+  push(r, "        if (Double.isNaN(d)) return \"NaN\";")
+  push(r, "        if (Double.isInfinite(d)) return d > 0 ? \"Infinity\" : \"-Infinity\";")
+  push(r, "        double r = Math.floor(d * 1e6 + 0.5) / 1e6;")
+  push(r, "        if (r == Math.rint(r) && Math.abs(r) < 1e15) {")
+  push(r, "            long l = (long) r;")
+  push(r, "            return l == 0 ? \"0\" : Long.toString(l);")
+  push(r, "        }")
+  push(r, "        return new java.math.BigDecimal(r).setScale(6, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    // ---------------------------------------------------------------- numbers")
+  push(r, "")
+  push(r, "    private static double N(Object v, String fn, int i) {")
+  push(r, "        if (v instanceof Number) return ((Number) v).doubleValue();")
+  push(r, "        throw new HashError(fn + \" needs numbers, but input \" + (i + 1) + \" is \" + kindOf(v) + \".\");")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    public static double add(Object... a) { double s = 0; for (int i = 0; i < a.length; i++) s += N(a[i], \"add\", i); return s; }")
+  push(r, "    public static double sub(Object a, Object b) { return N(a, \"sub\", 0) - N(b, \"sub\", 1); }")
+  push(r, "    public static double mul(Object... a) { double s = 1; for (int i = 0; i < a.length; i++) s *= N(a[i], \"mul\", i); return s; }")
+  push(r, "    public static double div(Object a, Object b) {")
+  push(r, "        double x = N(a, \"div\", 0), y = N(b, \"div\", 1);")
+  push(r, "        if (y == 0) throw new HashError(\"div tried to divide by 0.\");")
+  push(r, "        return x / y;")
+  push(r, "    }")
+  push(r, "    public static double mod(Object a, Object b) {")
+  push(r, "        double x = N(a, \"mod\", 0), y = N(b, \"mod\", 1);")
+  push(r, "        if (y == 0) throw new HashError(\"mod tried to divide by 0.\");")
+  push(r, "        return ((x % y) + y) % y;")
+  push(r, "    }")
+  push(r, "    public static double min(Object... a) { double s = Double.POSITIVE_INFINITY; for (int i = 0; i < a.length; i++) s = Math.min(s, N(a[i], \"min\", i)); return s; }")
+  push(r, "    public static double max(Object... a) { double s = Double.NEGATIVE_INFINITY; for (int i = 0; i < a.length; i++) s = Math.max(s, N(a[i], \"max\", i)); return s; }")
+  push(r, "    public static double abs(Object a) { return Math.abs(N(a, \"abs\", 0)); }")
+  push(r, "    public static double floor(Object a) { return Math.floor(N(a, \"floor\", 0)); }")
+  push(r, "    public static double ceil(Object a) { return Math.ceil(N(a, \"ceil\", 0)); }")
+  push(r, "    public static double round(Object n) { return Math.floor(N(n, \"round\", 0) + 0.5); }")
+  push(r, "    public static double round(Object n, Object places) {")
+  push(r, "        double f = Math.pow(10, N(places, \"round\", 1));")
+  push(r, "        return Math.floor(N(n, \"round\", 0) * f + 0.5) / f;")
+  push(r, "    }")
+  push(r, "    public static double sqrt(Object a) { return Math.sqrt(N(a, \"sqrt\", 0)); }")
+  push(r, "    public static double pow(Object a, Object b) { return Math.pow(N(a, \"pow\", 0), N(b, \"pow\", 1)); }")
+  push(r, "    public static double sin(Object a) { return Math.sin(N(a, \"sin\", 0)); }")
+  push(r, "    public static double cos(Object a) { return Math.cos(N(a, \"cos\", 0)); }")
+  push(r, "    public static double atan2(Object a, Object b) { return Math.atan2(N(a, \"atan2\", 0), N(b, \"atan2\", 1)); }")
+  push(r, "    public static double pi() { return Math.PI; }")
+  push(r, "    // Only in Java output (Hash in Abyss doesn't have these):")
+  push(r, "    public static double tan(Object a) { return Math.tan(N(a, \"tan\", 0)); }")
+  push(r, "    public static double atan(Object a) { return Math.atan(N(a, \"atan\", 0)); }")
+  push(r, "    public static double asin(Object a) { return Math.asin(N(a, \"asin\", 0)); }")
+  push(r, "    public static double acos(Object a) { return Math.acos(N(a, \"acos\", 0)); }")
+  push(r, "")
+  push(r, "    private static final java.util.Random RNG = new java.util.Random();")
+  push(r, "    public static double random() { return random(0.0, 1.0); }")
+  push(r, "    public static double random(Object lo) { return random(lo, 1.0); }")
+  push(r, "    public static double random(Object lo, Object hi) {")
+  push(r, "        double l = N(lo, \"random\", 0), h = N(hi, \"random\", 1);")
+  push(r, "        if (l == Math.rint(l) && h == Math.rint(h)) return l + Math.floor(RNG.nextDouble() * (h - l + 1));")
+  push(r, "        return l + RNG.nextDouble() * (h - l);")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    // ---------------------------------------------------------------- comparing")
+  push(r, "")
+  push(r, "    public static boolean eq(Object a, Object b) {")
+  push(r, "        if (a == b) return !(a instanceof Double && ((Double) a).isNaN());")
+  push(r, "        if (a == null || b == null) return false;")
+  push(r, "        if (a instanceof Number && b instanceof Number) return ((Number) a).doubleValue() == ((Number) b).doubleValue();")
+  push(r, "        if (a instanceof String && b instanceof String) return a.equals(b);")
+  push(r, "        if (a instanceof Boolean && b instanceof Boolean) return a.equals(b);")
+  push(r, "        return false;")
+  push(r, "    }")
+  push(r, "    public static boolean neq(Object a, Object b) { return !eq(a, b); }")
+  push(r, "")
+  push(r, "    private static boolean rel(Object a, Object b, int mode) {")
+  push(r, "        int c;")
+  push(r, "        if (a instanceof Number && b instanceof Number) {")
+  push(r, "            double x = ((Number) a).doubleValue(), y = ((Number) b).doubleValue();")
+  push(r, "            if (Double.isNaN(x) || Double.isNaN(y)) return false;")
+  push(r, "            c = x < y ? -1 : (x > y ? 1 : 0);")
+  push(r, "        } else if (a instanceof String && b instanceof String) {")
+  push(r, "            c = ((String) a).compareTo((String) b);")
+  push(r, "        } else return false;")
+  push(r, "        return mode == 0 ? c < 0 : mode == 1 ? c > 0 : mode == 2 ? c <= 0 : c >= 0;")
+  push(r, "    }")
+  push(r, "    public static boolean lt(Object a, Object b) { return rel(a, b, 0); }")
+  push(r, "    public static boolean gt(Object a, Object b) { return rel(a, b, 1); }")
+  push(r, "    public static boolean lte(Object a, Object b) { return rel(a, b, 2); }")
+  push(r, "    public static boolean gte(Object a, Object b) { return rel(a, b, 3); }")
+  push(r, "")
+  push(r, "    public static boolean and(Object... a) { for (Object x : a) if (!truthy(x)) return false; return true; }")
+  push(r, "    public static boolean or(Object... a) { for (Object x : a) if (truthy(x)) return true; return false; }")
+  push(r, "    public static boolean not(Object a) { return !truthy(a); }")
+  push(r, "")
+  push(r, "    // ---------------------------------------------------------------- text")
+  push(r, "")
+  push(r, "    public static String join(Object... a) { StringBuilder b = new StringBuilder(); for (Object x : a) b.append(show(x)); return b.toString(); }")
+  push(r, "    public static String text(Object v) { return show(v); }")
+  push(r, "    public static double number(Object v) {")
+  push(r, "        if (v instanceof Number) return ((Number) v).doubleValue();")
+  push(r, "        String s = show(v).trim();")
+  push(r, "        java.util.regex.Matcher m = java.util.regex.Pattern.compile(\"^[+-]?(\\\\d+\\\\.?\\\\d*|\\\\.\\\\d+)([eE][+-]?\\\\d+)?\").matcher(s);")
+  push(r, "        if (!m.find()) return 0;")
+  push(r, "        try { return Double.parseDouble(m.group()); } catch (NumberFormatException e) { return 0; }")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    public static double size(Object v) {")
+  push(r, "        if (v == null) return 0;")
+  push(r, "        if (v instanceof String) return ((String) v).length();")
+  push(r, "        if (v instanceof List) return ((List<?>) v).size();")
+  push(r, "        if (v instanceof HashObj) return ((HashObj) v).size();")
+  push(r, "        return 0;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    private static int idx(Object v, int len, int dflt, String fn, int input) {")
+  push(r, "        if (v == null) return dflt;")
+  push(r, "        double d = N(v, fn, input);")
+  push(r, "        d = d < 0 ? Math.max(len + Math.ceil(d), 0) : Math.min(Math.floor(d), len);")
+  push(r, "        return (int) d;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    @SuppressWarnings(\"unchecked\")")
+  push(r, "    public static Object slice(Object t, Object a, Object b) {")
+  push(r, "        if (t instanceof String) {")
+  push(r, "            String s = (String) t; int x = idx(a, s.length(), 0, \"slice\", 1), y = idx(b, s.length(), s.length(), \"slice\", 2);")
+  push(r, "            return x < y ? s.substring(x, y) : \"\";")
+  push(r, "        }")
+  push(r, "        if (t instanceof List) {")
+  push(r, "            List<Object> l = (List<Object>) t; int x = idx(a, l.size(), 0, \"slice\", 1), y = idx(b, l.size(), l.size(), \"slice\", 2);")
+  push(r, "            return x < y ? new ArrayList<Object>(l.subList(x, y)) : new ArrayList<Object>();")
+  push(r, "        }")
+  push(r, "        throw new HashError(\"slice needs text or a list, but got \" + kindOf(t) + \".\");")
+  push(r, "    }")
+  push(r, "    public static Object slice(Object t, Object a) { return slice(t, a, null); }")
+  push(r, "")
+  push(r, "    private static String Txt(Object t, String fn) {")
+  push(r, "        if (t instanceof String) return (String) t;")
+  push(r, "        throw new HashError(fn + \" needs text, but got \" + kindOf(t) + \".\");")
+  push(r, "    }")
+  push(r, "    public static String lower(Object t) { return Txt(t, \"lower\").toLowerCase(); }")
+  push(r, "    public static String upper(Object t) { return Txt(t, \"upper\").toUpperCase(); }")
+  push(r, "")
+  push(r, "    /** Text with quotes around it, as it would be written in code. */")
+  push(r, "    public static String quote(Object t) {")
+  push(r, "        String s = show(t); StringBuilder b = new StringBuilder(\"\\\"\");")
+  push(r, "        for (int i = 0; i < s.length(); i++) {")
+  push(r, "            char c = s.charAt(i);")
+  push(r, "            switch (c) {")
+  push(r, "                case '\"': b.append(\"\\\\\\\"\"); break;")
+  push(r, "                case '\\\\': b.append(\"\\\\\\\\\"); break;")
+  push(r, "                case '\\n': b.append(\"\\\\n\"); break;")
+  push(r, "                case '\\r': b.append(\"\\\\r\"); break;")
+  push(r, "                case '\\t': b.append(\"\\\\t\"); break;")
+  push(r, "                case '\\b': b.append(\"\\\\b\"); break;")
+  push(r, "                case '\\f': b.append(\"\\\\f\"); break;")
+  push(r, "                default:")
+  push(r, "                    if (c < 0x20) b.append(String.format(\"\\\\u%04x\", (int) c)); else b.append(c);")
+  push(r, "            }")
+  push(r, "        }")
+  push(r, "        return b.append('\"').toString();")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    public static Object split(Object t, Object sep) {")
+  push(r, "        String s = Txt(t, \"split\"); String d = show(sep);")
+  push(r, "        List<Object> out = new ArrayList<Object>();")
+  push(r, "        if (d.length() == 0) { for (int i = 0; i < s.length(); i++) out.add(String.valueOf(s.charAt(i))); return out; }")
+  push(r, "        int from = 0, at;")
+  push(r, "        while ((at = s.indexOf(d, from)) >= 0) { out.add(s.substring(from, at)); from = at + d.length(); }")
+  push(r, "        out.add(s.substring(from));")
+  push(r, "        return out;")
+  push(r, "    }")
+  push(r, "    public static double find(Object t, Object s) { return Txt(t, \"find\").indexOf(show(s)); }")
+  push(r, "    public static double find(Object t, Object s, Object from) { return Txt(t, \"find\").indexOf(show(s), (int) N(from, \"find\", 2)); }")
+  push(r, "    public static double findLast(Object t, Object s) { return Txt(t, \"findLast\").lastIndexOf(show(s)); }")
+  push(r, "    public static double findLast(Object t, Object s, Object from) { return Txt(t, \"findLast\").lastIndexOf(show(s), (int) N(from, \"findLast\", 2)); }")
+  push(r, "")
+  push(r, "    // ---------------------------------------------------------------- lists and maps")
+  push(r, "")
+  push(r, "    public static List<Object> list(Object... a) { List<Object> l = new ArrayList<Object>(a.length); for (Object x : a) l.add(x); return l; }")
+  push(r, "    public static HashObj map() { return new HashObj(); }")
+  push(r, "")
+  push(r, "    @SuppressWarnings(\"unchecked\")")
+  push(r, "    private static List<Object> Lst(Object l, String fn) {")
+  push(r, "        if (l instanceof List) return (List<Object>) l;")
+  push(r, "        throw new HashError(fn + \" needs a list, but got \" + kindOf(l) + \".\");")
+  push(r, "    }")
+  push(r, "    private static Object Coll(Object l, String fn) {")
+  push(r, "        if (l instanceof List || l instanceof HashObj) return l;")
+  push(r, "        throw new HashError(fn + \" needs a list or a map, but got \" + kindOf(l) + \".\");")
+  push(r, "    }")
+  push(r, "    private static String key(Object k) {")
+  push(r, "        if (k instanceof String) return (String) k;")
+  push(r, "        return show(k);")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    public static List<Object> keys(Object m) {")
+  push(r, "        Coll(m, \"keys\");")
+  push(r, "        if (m instanceof HashObj) return ((HashObj) m).keys();")
+  push(r, "        List<Object> out = new ArrayList<Object>();")
+  push(r, "        for (int i = 0; i < ((List<?>) m).size(); i++) out.add(String.valueOf(i));")
+  push(r, "        return out;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    @SuppressWarnings(\"unchecked\")")
+  push(r, "    public static Object get(Object l, Object i) {")
+  push(r, "        Coll(l, \"get\");")
+  push(r, "        if (l instanceof HashObj) return ((HashObj) l).get(key(i));")
+  push(r, "        if (!(i instanceof Number)) return null;")
+  push(r, "        double d = ((Number) i).doubleValue();")
+  push(r, "        List<Object> x = (List<Object>) l;")
+  push(r, "        if (d != Math.rint(d) || d < 0 || d >= x.size()) return null;")
+  push(r, "        return x.get((int) d);")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    @SuppressWarnings(\"unchecked\")")
+  push(r, "    public static Object put(Object l, Object i, Object v) {")
+  push(r, "        Coll(l, \"put\");")
+  push(r, "        if (l instanceof HashObj) { ((HashObj) l).set(key(i), v); return v; }")
+  push(r, "        double d = N(i, \"put\", 1);")
+  push(r, "        List<Object> x = (List<Object>) l;")
+  push(r, "        if (d != Math.rint(d) || d < 0) throw new HashError(\"put needs a list place that is 0 or more, but got \" + show(i) + \".\");")
+  push(r, "        int at = (int) d;")
+  push(r, "        while (x.size() <= at) x.add(null);")
+  push(r, "        x.set(at, v);")
+  push(r, "        return v;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    public static Object push(Object l, Object v) { Lst(l, \"push\").add(v); return v; }")
+  push(r, "    public static Object pop(Object l) { List<Object> x = Lst(l, \"pop\"); return x.isEmpty() ? null : x.remove(x.size() - 1); }")
+  push(r, "    public static Object removeAt(Object l, Object i) {")
+  push(r, "        List<Object> x = Lst(l, \"removeAt\"); double d = N(i, \"removeAt\", 1);")
+  push(r, "        if (d != Math.rint(d) || d < 0 || d >= x.size()) return null;")
+  push(r, "        return x.remove((int) d);")
+  push(r, "    }")
+  push(r, "    public static boolean remove(Object l, Object v) {")
+  push(r, "        List<Object> x = Lst(l, \"remove\");")
+  push(r, "        for (int i = 0; i < x.size(); i++) if (eq(x.get(i), v)) { x.remove(i); return true; }")
+  push(r, "        return false;")
+  push(r, "    }")
+  push(r, "    public static boolean has(Object l, Object v) {")
+  push(r, "        if (l instanceof String) return ((String) l).contains(show(v));")
+  push(r, "        if (l instanceof HashObj) return ((HashObj) l).has(key(v));")
+  push(r, "        for (Object x : Lst(l, \"has\")) if (eq(x, v)) return true;")
+  push(r, "        return false;")
+  push(r, "    }")
+  push(r, "    public static String joinList(Object l) { return joinList(l, \"\"); }")
+  push(r, "    public static String joinList(Object l, Object sep) {")
+  push(r, "        StringBuilder b = new StringBuilder(); String s = show(sep); boolean first = true;")
+  push(r, "        for (Object x : Lst(l, \"joinList\")) { if (!first) b.append(s); first = false; b.append(show(x)); }")
+  push(r, "        return b.toString();")
+  push(r, "    }")
+  push(r, "    public static List<Object> keep(Object l, Object f) {")
+  push(r, "        List<Object> out = new ArrayList<Object>();")
+  push(r, "        for (Object x : new ArrayList<Object>(Lst(l, \"keep\"))) if (truthy(call(f, x))) out.add(x);")
+  push(r, "        return out;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    // ---------------------------------------------------------------- the world")
+  push(r, "")
+  push(r, "    public static Object print(Object... a) {")
+  push(r, "        StringBuilder b = new StringBuilder();")
+  push(r, "        for (int i = 0; i < a.length; i++) { if (i > 0) b.append(' '); b.append(show(a[i])); }")
+  push(r, "        System.out.println(b);")
+  push(r, "        return null;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    private static final long T0 = System.nanoTime();")
+  push(r, "    /** Seconds since the program started. */")
+  push(r, "    public static double time() { return (System.nanoTime() - T0) / 1e9; }")
+  push(r, "    /** Milliseconds on the computer's clock. */")
+  push(r, "    public static double clock() { return (double) System.currentTimeMillis(); }")
+  push(r, "")
+  push(r, "    public static Object fail(Object msg) { throw new HashError(show(msg)); }")
+  push(r, "    public static Object fail(Object msg, Object file, Object line, Object col) {")
+  push(r, "        throw new HashError(show(msg), show(file), (int) N(line, \"fail\", 2), (int) N(col, \"fail\", 3));")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    /** Only in Java output: waits some milliseconds. */")
+  push(r, "    public static Object sleep(Object ms) {")
+  push(r, "        try { Thread.sleep((long) N(ms, \"sleep\", 0)); }")
+  push(r, "        catch (InterruptedException e) { Thread.currentThread().interrupt(); }")
+  push(r, "        return null;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    // ---------------------------------------------------------------- using Java objects from Hash")
+  push(r, "")
+  push(r, "    /** Hash numbers are Doubles; other Java numbers and letters are turned into Hash values. */")
+  push(r, "    @SuppressWarnings(\"unchecked\")")
+  push(r, "    public static Object norm(Object v) {")
+  push(r, "        if (v == null || v instanceof Double || v instanceof String || v instanceof Boolean) return v;")
+  push(r, "        if (v instanceof Number) return ((Number) v).doubleValue();")
+  push(r, "        if (v instanceof Character) return String.valueOf(v);")
+  push(r, "        if (v.getClass().isArray()) {")
+  push(r, "            List<Object> out = new ArrayList<Object>();")
+  push(r, "            for (int i = 0; i < Array.getLength(v); i++) out.add(norm(Array.get(v, i)));")
+  push(r, "            return out;")
+  push(r, "        }")
+  push(r, "        return v;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    /** A Java class by its full name, for using its constants and static methods. Nested classes can use . or $. */")
+  push(r, "    public static Object javaClass(Object name) {")
+  push(r, "        String n = show(name);")
+  push(r, "        for (;;) {")
+  push(r, "            try { return Class.forName(n); }")
+  push(r, "            catch (ClassNotFoundException e) {")
+  push(r, "                int dot = n.lastIndexOf('.');")
+  push(r, "                if (dot < 0) throw new HashError(\"javaClass can't find a class called \\\"\" + show(name) + \"\\\".\");")
+  push(r, "                n = n.substring(0, dot) + \"$\" + n.substring(dot + 1);")
+  push(r, "            }")
+  push(r, "        }")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    /** Makes a new Java object: javaNew(javaClass(\"java.util.Date\")). */")
+  push(r, "    public static Object javaNew(Object cls, Object... args) {")
+  push(r, "        if (!(cls instanceof Class)) throw new HashError(\"javaNew needs a class from javaClass, but got \" + kindOf(cls) + \".\");")
+  push(r, "        Constructor<?> best = null; int bestScore = -1;")
+  push(r, "        for (Constructor<?> c : ((Class<?>) cls).getConstructors()) {")
+  push(r, "            int s = score(c.getParameterTypes(), args);")
+  push(r, "            if (s > bestScore) { best = c; bestScore = s; }")
+  push(r, "        }")
+  push(r, "        if (best == null) throw new HashError(\"No way to make a \" + ((Class<?>) cls).getSimpleName() + \" with \" + args.length + \" inputs like these.\");")
+  push(r, "        try { return norm(best.newInstance(convert(best.getParameterTypes(), args))); }")
+  push(r, "        catch (Exception e) { throw wrap(e); }")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    /** obj.name for a me-object, a map, a Java object's field, or a class's constant. */")
+  push(r, "    public static Object field(Object o, String name) {")
+  push(r, "        if (o instanceof HashObj) return ((HashObj) o).get(name);")
+  push(r, "        if (o == null) throw new HashError(\"Tried to use .\" + name + \" on nothing (that thing doesn't exist).\");")
+  push(r, "        Class<?> c = o instanceof Class ? (Class<?>) o : o.getClass();")
+  push(r, "        try {")
+  push(r, "            Field f = c.getField(name);")
+  push(r, "            return norm(f.get(Modifier.isStatic(f.getModifiers()) ? null : o));")
+  push(r, "        } catch (NoSuchFieldException e) {")
+  push(r, "            // a nested class, like DcMotor.RunMode")
+  push(r, "            if (o instanceof Class) {")
+  push(r, "                for (Class<?> n : ((Class<?>) o).getClasses()) if (n.getSimpleName().equals(name)) return n;")
+  push(r, "            }")
+  push(r, "            throw new HashError(show(o instanceof Class ? ((Class<?>) o).getSimpleName() : o.getClass().getSimpleName()) + \" has no .\" + name + \".\");")
+  push(r, "        } catch (IllegalAccessException e) { throw wrap(e); }")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    /** obj.name = value for a me-object, a map, or a Java object's public field. */")
+  push(r, "    public static Object setField(Object o, String name, Object v) {")
+  push(r, "        if (o instanceof HashObj) { ((HashObj) o).set(name, v); return v; }")
+  push(r, "        if (o == null) throw new HashError(\"Tried to change .\" + name + \" on nothing (that thing doesn't exist).\");")
+  push(r, "        try {")
+  push(r, "            Field f = (o instanceof Class ? (Class<?>) o : o.getClass()).getField(name);")
+  push(r, "            f.set(Modifier.isStatic(f.getModifiers()) ? null : o, convert1(f.getType(), v));")
+  push(r, "            return v;")
+  push(r, "        } catch (NoSuchFieldException e) { throw new HashError(o.getClass().getSimpleName() + \" has no .\" + name + \" to change.\"); }")
+  push(r, "        catch (IllegalAccessException e) { throw wrap(e); }")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    /** obj.name(args): a function inside a me-object, or a method of a Java object (or a class's static method). */")
+  push(r, "    public static Object invoke(Object o, String name, Object... args) {")
+  push(r, "        if (o instanceof HashObj) {")
+  push(r, "            Object f = ((HashObj) o).get(name);")
+  push(r, "            if (!(f instanceof HashFn)) throw new HashError(\".\" + name + \" isn't a function, so it can't be called with ( ).\");")
+  push(r, "            return norm(((HashFn) f).call(args));")
+  push(r, "        }")
+  push(r, "        if (o == null) throw new HashError(\"Tried to use .\" + name + \" on nothing (that thing doesn't exist).\");")
+  push(r, "        boolean isClass = o instanceof Class;")
+  push(r, "        Class<?> c = isClass ? (Class<?>) o : o.getClass();")
+  push(r, "        Method best = null; int bestScore = -1;")
+  push(r, "        for (Method m : c.getMethods()) {")
+  push(r, "            if (!m.getName().equals(name) || (isClass && !Modifier.isStatic(m.getModifiers()))) continue;")
+  push(r, "            int s = score(m.getParameterTypes(), args);")
+  push(r, "            if (s > bestScore) { best = m; bestScore = s; }")
+  push(r, "        }")
+  push(r, "        if (best == null) throw new HashError(c.getSimpleName() + \" has no .\" + name + \" that takes \" + args.length + \" input\" + (args.length == 1 ? \"\" : \"s\") + \" like these.\");")
+  push(r, "        try {")
+  push(r, "            try { best.setAccessible(true); } catch (RuntimeException ignored) {}")
+  push(r, "            return norm(best.invoke(Modifier.isStatic(best.getModifiers()) ? null : o, convert(best.getParameterTypes(), args)));")
+  push(r, "        } catch (java.lang.reflect.InvocationTargetException e) {")
+  push(r, "            Throwable t = e.getCause();")
+  push(r, "            if (t instanceof RuntimeException) throw (RuntimeException) t;")
+  push(r, "            throw wrap(t == null ? e : t);")
+  push(r, "        } catch (IllegalAccessException e) { throw wrap(e); }")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    private static RuntimeException wrap(Throwable e) { return new HashError(String.valueOf(e.getMessage() == null ? e.toString() : e.getMessage())); }")
+  push(r, "")
+  push(r, "    // How well each input fits each parameter: -1 is no fit, bigger is better.")
+  push(r, "    private static int score(Class<?>[] types, Object[] args) {")
+  push(r, "        if (types.length != args.length) return -1;")
+  push(r, "        int total = 1;")
+  push(r, "        for (int i = 0; i < types.length; i++) {")
+  push(r, "            int s = fit(types[i], args[i]);")
+  push(r, "            if (s < 0) return -1;")
+  push(r, "            total += s;")
+  push(r, "        }")
+  push(r, "        return total;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    private static int fit(Class<?> t, Object v) {")
+  push(r, "        if (v == null) return t.isPrimitive() ? -1 : 1;")
+  push(r, "        // Whole numbers go to int first (like a number written in Java), then long, then double.")
+  push(r, "        if (t == double.class || t == Double.class) return v instanceof Number ? 5 : -1;")
+  push(r, "        if (t == float.class || t == Float.class) return v instanceof Number ? 4 : -1;")
+  push(r, "        if (t == int.class || t == Integer.class) return v instanceof Number && whole(v) ? 8 : -1;")
+  push(r, "        if (t == long.class || t == Long.class) return v instanceof Number && whole(v) ? 7 : -1;")
+  push(r, "        if (t == short.class || t == Short.class || t == byte.class || t == Byte.class) return v instanceof Number && whole(v) ? 3 : -1;")
+  push(r, "        if (t == boolean.class || t == Boolean.class) return v instanceof Boolean ? 5 : -1;")
+  push(r, "        if (t == char.class || t == Character.class) return v instanceof String && ((String) v).length() == 1 ? 3 : -1;")
+  push(r, "        if (t == String.class) return v instanceof String ? 5 : -1;")
+  push(r, "        if (t.isEnum()) {")
+  push(r, "            if (t.isInstance(v)) return 5;")
+  push(r, "            if (v instanceof String) for (Object k : t.getEnumConstants()) if (((Enum<?>) k).name().equals(v)) return 4;")
+  push(r, "            return -1;")
+  push(r, "        }")
+  push(r, "        if (t == Object.class) return 1;")
+  push(r, "        return t.isInstance(v) ? 4 : -1;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    private static boolean whole(Object v) { double d = ((Number) v).doubleValue(); return d == Math.rint(d); }")
+  push(r, "")
+  push(r, "    private static Object[] convert(Class<?>[] types, Object[] args) {")
+  push(r, "        Object[] out = new Object[args.length];")
+  push(r, "        for (int i = 0; i < args.length; i++) out[i] = convert1(types[i], args[i]);")
+  push(r, "        return out;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    @SuppressWarnings({\"unchecked\", \"rawtypes\"})")
+  push(r, "    private static Object convert1(Class<?> t, Object v) {")
+  push(r, "        if (v == null) return null;")
+  push(r, "        if (v instanceof Number) {")
+  push(r, "            double d = ((Number) v).doubleValue();")
+  push(r, "            if (t == double.class || t == Double.class) return d;")
+  push(r, "            if (t == float.class || t == Float.class) return (float) d;")
+  push(r, "            if (t == long.class || t == Long.class) return (long) d;")
+  push(r, "            if (t == int.class || t == Integer.class) return (int) d;")
+  push(r, "            if (t == short.class || t == Short.class) return (short) d;")
+  push(r, "            if (t == byte.class || t == Byte.class) return (byte) d;")
+  push(r, "            return v;")
+  push(r, "        }")
+  push(r, "        if (t.isEnum() && v instanceof String) return Enum.valueOf((Class<? extends Enum>) t, (String) v);")
+  push(r, "        if ((t == char.class || t == Character.class) && v instanceof String) return ((String) v).charAt(0);")
+  push(r, "        return v;")
+  push(r, "    }")
+  push(r, "}")
+  joinList(r, "\n")
+]
