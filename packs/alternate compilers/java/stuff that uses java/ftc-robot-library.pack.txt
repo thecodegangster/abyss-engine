@@ -1,0 +1,278 @@
+//@ pack FTC Robot Library
+//@ target compiler
+// Makes the Hash to Java compiler produce FTC robot code: OpMode files that go in TeamCode (OnBot Java, Android
+// Studio or Blocks-free Java), written in Hash. Each Hash game tab becomes one OpMode (a LinearOpMode).
+//
+// A Hash tab for a robot looks like this:
+//
+//   //@ teleop "Drive"            <- or: //@ autonomous "Red Left". Optional: //@ group "Comp"  and  //@ disabled
+//   {left} = motor("left_drive")   <- set up the robot at the top
+//   {right} = motor("right_drive")
+//   setDirection(right, "reverse")
+//   #run[
+//     waitForStart()
+//     %(running())[
+//       {g} = pad1()
+//       setPower(left, g.left_stick_y)
+//       setPower(right, g.right_stick_y)
+//       say("left", g.left_stick_y)
+//       sayNow()
+//     ]
+//   ]
+//
+// The top of the tab runs first (hardware names, setup), then #run, which is your program. #run is required.
+//
+// What you can use, on top of everything the Hash to Java compiler already has (math, text, lists, maps, loops):
+//   Hardware   motor(name)  servo(name)  crServo(name)  imu(name)  device(javaClassName, name)
+//   Motors     setPower(m, p)  setVelocity(m, ticksPerSecond)  setDirection(m, "forward"|"reverse")
+//              setMode(m, "run_using_encoder"|"run_without_encoder"|"stop_and_reset_encoder"|"run_to_position")
+//              setBrake(m, "brake"|"float")  setTarget(m, ticks)  position(m)  isBusy(m)
+//   Servos     setServo(s, 0 to 1)  servoPosition(s)   (a crServo uses setPower)
+//   Gamepads   pad1()  pad2()   then  g.left_stick_x  g.left_stick_y  g.right_stick_x  g.right_stick_y  g.a  g.b  g.x  g.y
+//              g.dpad_up  g.left_bumper  g.left_trigger ... (any public field of the FTC Gamepad class)
+//   Display    say(caption, value)  sayLine(text)  sayNow()  (sayNow shows it; print(...) also goes to the phone screen)
+//   Running    waitForStart()  running()  sleep(milliseconds)  idle()  elapsed() (seconds)  resetTimer()
+//   Gyro       setupImu(imu, logoDirection, usbDirection)  heading(imu) (degrees)  resetHeading(imu)
+// Anything else in the FTC library can be used with the compiler's javaClass / javaNew and . calls.
+//
+// Needs the REV Control Hub IMU API (FTC SDK 8.0 or newer) for imu/heading. The Java comes out in Java 8 style.
+// Put the generated .java files, and HashRuntime.java, in org/firstinspires/ftc/teamcode.
+//
+// Dependencies: Hash to Java (compiler), which this pack changes. The compiler pack must be above this pack in the
+// Packs list (later packs win, so this pack's #hjvTarget replaces the compiler's). Hash to Java (UI) works with it too.
+// This pack replaces one function of the compiler pack, #hjvTarget. Every other name it adds starts with ftc or FTC.
+
+// Java names the OpMode class already has, which Hash functions and variables must not reuse.
+{FTC_RESERVED} = list("hardwareMap", "telemetry", "gamepad1", "gamepad2", "time", "requestOpModeStop", "idle", "waitForStart", "opModeIsActive", "opModeInInit", "isStarted", "isStopRequested", "getRuntime", "resetRuntime", "updateTelemetry", "init", "init_loop", "start", "loop", "stop", "runOpMode", "internalPostInitLoop", "internalPostLoop", "internalOpModeServices", "wait", "notify", "notifyAll", "equals", "hashCode", "toString", "getClass", "clone", "finalize", "ftcD", "ftcS", "ftcEnum", "ftcMotor", "ftcServo", "ftcCrServo", "ftcImu", "ftcDevice", "ftcSetPower", "ftcSetVelocity", "ftcSetDirection", "ftcSetMode", "ftcSetBrake", "ftcSetTarget", "ftcPosition", "ftcBusy", "ftcSetServo", "ftcServoPosition", "ftcSay", "ftcSayLine", "ftcSayNow", "ftcPrint", "ftcWaitForStart", "ftcSleep", "ftcIdle", "ftcRunning", "ftcElapsed", "ftcResetTimer", "ftcSetupImu", "ftcHeading", "ftcResetHeading")
+
+{FTC_IMPORTS} = list(
+  "import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;",
+  "import com.qualcomm.robotcore.eventloop.opmode.Autonomous;",
+  "import com.qualcomm.robotcore.eventloop.opmode.Disabled;",
+  "import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;",
+  "import com.qualcomm.robotcore.eventloop.opmode.TeleOp;",
+  "import com.qualcomm.robotcore.hardware.CRServo;",
+  "import com.qualcomm.robotcore.hardware.DcMotor;",
+  "import com.qualcomm.robotcore.hardware.DcMotorEx;",
+  "import com.qualcomm.robotcore.hardware.DcMotorSimple;",
+  "import com.qualcomm.robotcore.hardware.IMU;",
+  "import com.qualcomm.robotcore.hardware.Servo;",
+  "import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;"
+)
+
+// Adds one built-in. helper is the Java method to call, ret is num, bool or obj, n is how many inputs it takes
+// (missing ones are filled with nothing; -1 means any number).
+#ftcAdd(table, name, ret, helper, n)[
+  {d} = map()
+  d.ret = ret
+  d.void = false
+  d.expr = false
+  @(gte(n, 0))[ d.arity = n ]
+  d.emit = #(args)[
+    {full} = list()
+    %(args, a)[ push(full, a) ]
+    %(sub(n, size(args)))[ push(full, "null") ]
+    join(helper, "(", hjvJoinArgs(full), ")")
+  ]
+  put(table, name, d)
+]
+
+// Adds a built-in that is just a Java name, with no call after it (the gamepads).
+#ftcAddRaw(table, name, javaName)[
+  {d} = map()
+  d.ret = "obj"
+  d.void = false
+  d.expr = false
+  d.emit = #(args)[ javaName ]
+  put(table, name, d)
+]
+
+#ftcBuiltins[
+  {t} = map()
+  ftcAdd(t, "motor", "obj", "ftcMotor", 1)
+  ftcAdd(t, "servo", "obj", "ftcServo", 1)
+  ftcAdd(t, "crServo", "obj", "ftcCrServo", 1)
+  ftcAdd(t, "imu", "obj", "ftcImu", 1)
+  ftcAdd(t, "device", "obj", "ftcDevice", 2)
+  ftcAdd(t, "setPower", "obj", "ftcSetPower", 2)
+  ftcAdd(t, "setVelocity", "obj", "ftcSetVelocity", 2)
+  ftcAdd(t, "setDirection", "obj", "ftcSetDirection", 2)
+  ftcAdd(t, "setMode", "obj", "ftcSetMode", 2)
+  ftcAdd(t, "setBrake", "obj", "ftcSetBrake", 2)
+  ftcAdd(t, "setTarget", "obj", "ftcSetTarget", 2)
+  ftcAdd(t, "position", "num", "ftcPosition", 1)
+  ftcAdd(t, "isBusy", "bool", "ftcBusy", 1)
+  ftcAdd(t, "setServo", "obj", "ftcSetServo", 2)
+  ftcAdd(t, "servoPosition", "num", "ftcServoPosition", 1)
+  ftcAdd(t, "say", "obj", "ftcSay", 2)
+  ftcAdd(t, "sayLine", "obj", "ftcSayLine", 1)
+  ftcAdd(t, "sayNow", "obj", "ftcSayNow", 0)
+  ftcAdd(t, "print", "obj", "ftcPrint", -1)
+  ftcAdd(t, "waitForStart", "obj", "ftcWaitForStart", 0)
+  ftcAdd(t, "sleep", "obj", "ftcSleep", 1)
+  ftcAdd(t, "idle", "obj", "ftcIdle", 0)
+  ftcAdd(t, "running", "bool", "ftcRunning", 0)
+  ftcAdd(t, "elapsed", "num", "ftcElapsed", 0)
+  ftcAdd(t, "resetTimer", "obj", "ftcResetTimer", 0)
+  ftcAdd(t, "setupImu", "obj", "ftcSetupImu", 3)
+  ftcAdd(t, "heading", "num", "ftcHeading", 1)
+  ftcAdd(t, "resetHeading", "obj", "ftcResetHeading", 1)
+  ftcAddRaw(t, "pad1", "gamepad1")
+  ftcAddRaw(t, "pad2", "gamepad2")
+  t
+]
+
+// The //@ lines that matter here: kind (teleop or autonomous), name, group, disabled, and the line of the kind.
+#ftcMeta(info)[
+  {m} = map()
+  m.kind = ""
+  m.name = ""
+  m.group = ""
+  m.disabled = false
+  m.line = 1
+  m.dupe = 0
+  %(info.meta, row)[
+    {parts} = split(row.text, "\"")
+    {word} = get(split(hjvTrim(get(parts, 0)), " "), 0)
+    {q} = ""
+    @(gt(size(parts), 1))[ q = get(parts, 1) ]
+    @(or(eq(word, "teleop"), eq(word, "autonomous")))[
+      @(size(m.kind))[ m.dupe = row.line ]
+      m.kind = word
+      m.name = q
+      m.line = row.line
+    ]
+    @(eq(word, "group"))[ m.group = q ]
+    @(eq(word, "disabled"))[ m.disabled = true ]
+  ]
+  m
+]
+
+#ftcCheck(info)[
+  {m} = ftcMeta(info)
+  @(not(size(m.kind)))[
+    fail("An FTC OpMode needs a line like  //@ teleop \"My Name\"  or  //@ autonomous \"My Name\"  at the top of the tab, so the Driver Station can list it.", info.file, 1, 1)
+  ]
+  @(m.dupe)[ fail("A tab can only be one OpMode. Keep one //@ teleop or //@ autonomous line.", info.file, m.dupe, 1) ]
+  @(not(has(info.fns, "run")))[
+    fail("An FTC OpMode needs a function called #run. It holds the program that runs after the robot is set up, like  #run[ waitForStart() ... ]", info.file, 1, 1)
+  ]
+  @(neq(get(info.fns, "run").arity, 0))[
+    fail("#run can't take inputs. It is started by the robot.", info.file, 1, 1)
+  ]
+  true
+]
+
+#ftcClassLine(cls, info)[
+  {m} = ftcMeta(info)
+  {name} = m.name
+  @(not(size(name)))[ name = cls ]
+  {kind} = "TeleOp"
+  @(eq(m.kind, "autonomous"))[ kind = "Autonomous" ]
+  {args} = join("name = ", quote(name))
+  @(size(m.group))[ args = join(args, ", group = ", quote(m.group)) ]
+  {out} = ""
+  @(m.disabled)[ out = "@Disabled\n" ]
+  join(out, "@", kind, "(", args, ")\npublic class ", cls, " extends LinearOpMode")
+]
+
+#ftcEntry(info)[
+  {run} = get(info.fns, "run").jname
+  join(ftcHelperSource(), "\n    @Override\n    public void runOpMode() {\n", info.init, "        ", run, "();\n    }\n")
+]
+
+// Replaces the compiler pack's #hjvTarget: Java for an FTC LinearOpMode in TeamCode.
+#hjvTarget[
+  {t} = map()
+  t.name = "ftc"
+  t.pkg = "org.firstinspires.ftc.teamcode"
+  t.isStatic = false
+  t.imports = FTC_IMPORTS
+  t.reserved = FTC_RESERVED
+  t.builtins = ftcBuiltins()
+  t.classLine = ftcClassLine
+  t.entry = ftcEntry
+  t.check = ftcCheck
+  t
+]
+
+// The Java helper methods that go inside every OpMode class.
+#ftcHelperSource[
+  {r} = list()
+  push(r, "    // ---- Helpers for the Hash code above: robot hardware, telemetry and timing. ----")
+  push(r, "    // (Made by the FTC Robot Library pack. They are here so the file stands on its own.)")
+  push(r, "")
+  push(r, "    private double ftcD(Object o) {")
+  push(r, "        if (o instanceof Number) return ((Number) o).doubleValue();")
+  push(r, "        throw new HashError(\"Expected a number, but got \" + kindOf(o) + \".\");")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    private String ftcS(Object o) { return show(o); }")
+  push(r, "")
+  push(r, "    private <E extends Enum<E>> E ftcEnum(Class<E> cls, Object v, String what) {")
+  push(r, "        String s = show(v).trim().toUpperCase().replace(' ', '_').replace('-', '_');")
+  push(r, "        try { return Enum.valueOf(cls, s); }")
+  push(r, "        catch (IllegalArgumentException e) {")
+  push(r, "            StringBuilder names = new StringBuilder();")
+  push(r, "            for (E c : cls.getEnumConstants()) { if (names.length() > 0) names.append(\", \"); names.append(c.name().toLowerCase()); }")
+  push(r, "            throw new HashError(\"\\\"\" + show(v) + \"\\\" isn't a \" + what + \". Use one of: \" + names + \".\");")
+  push(r, "        }")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    private Object ftcMotor(Object name) { return hardwareMap.get(DcMotorEx.class, ftcS(name)); }")
+  push(r, "    private Object ftcServo(Object name) { return hardwareMap.get(Servo.class, ftcS(name)); }")
+  push(r, "    private Object ftcCrServo(Object name) { return hardwareMap.get(CRServo.class, ftcS(name)); }")
+  push(r, "    private Object ftcImu(Object name) { return hardwareMap.get(IMU.class, ftcS(name)); }")
+  push(r, "")
+  push(r, "    @SuppressWarnings({\"unchecked\", \"rawtypes\"})")
+  push(r, "    private Object ftcDevice(Object type, Object name) {")
+  push(r, "        Class<?> c = type instanceof Class ? (Class<?>) type : (Class<?>) javaClass(type);")
+  push(r, "        return hardwareMap.get((Class) c, ftcS(name));")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    private Object ftcSetPower(Object d, Object power) { ((DcMotorSimple) d).setPower(ftcD(power)); return null; }")
+  push(r, "    private Object ftcSetVelocity(Object m, Object ticksPerSecond) { ((DcMotorEx) m).setVelocity(ftcD(ticksPerSecond)); return null; }")
+  push(r, "")
+  push(r, "    private Object ftcSetDirection(Object d, Object dir) {")
+  push(r, "        if (d instanceof Servo) ((Servo) d).setDirection(ftcEnum(Servo.Direction.class, dir, \"direction\"));")
+  push(r, "        else ((DcMotorSimple) d).setDirection(ftcEnum(DcMotorSimple.Direction.class, dir, \"direction\"));")
+  push(r, "        return null;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    private Object ftcSetMode(Object m, Object mode) { ((DcMotor) m).setMode(ftcEnum(DcMotor.RunMode.class, mode, \"mode\")); return null; }")
+  push(r, "    private Object ftcSetBrake(Object m, Object how) { ((DcMotor) m).setZeroPowerBehavior(ftcEnum(DcMotor.ZeroPowerBehavior.class, how, \"stop behavior\")); return null; }")
+  push(r, "    private Object ftcSetTarget(Object m, Object ticks) { ((DcMotor) m).setTargetPosition((int) Math.round(ftcD(ticks))); return null; }")
+  push(r, "    private double ftcPosition(Object m) { return ((DcMotor) m).getCurrentPosition(); }")
+  push(r, "    private boolean ftcBusy(Object m) { return ((DcMotor) m).isBusy(); }")
+  push(r, "    private Object ftcSetServo(Object s, Object pos) { ((Servo) s).setPosition(ftcD(pos)); return null; }")
+  push(r, "    private double ftcServoPosition(Object s) { return ((Servo) s).getPosition(); }")
+  push(r, "")
+  push(r, "    private Object ftcSay(Object caption, Object value) { telemetry.addData(ftcS(caption), show(value)); return null; }")
+  push(r, "    private Object ftcSayLine(Object text) { telemetry.addLine(ftcS(text)); return null; }")
+  push(r, "    private Object ftcSayNow() { telemetry.update(); return null; }")
+  push(r, "    private Object ftcPrint(Object... a) {")
+  push(r, "        StringBuilder b = new StringBuilder();")
+  push(r, "        for (int i = 0; i < a.length; i++) { if (i > 0) b.append(' '); b.append(show(a[i])); }")
+  push(r, "        telemetry.addLine(b.toString());")
+  push(r, "        telemetry.update();")
+  push(r, "        return null;")
+  push(r, "    }")
+  push(r, "")
+  push(r, "    private Object ftcWaitForStart() { waitForStart(); return null; }")
+  push(r, "    private Object ftcSleep(Object ms) { sleep((long) ftcD(ms)); return null; }")
+  push(r, "    private Object ftcIdle() { idle(); return null; }")
+  push(r, "    private boolean ftcRunning() { return opModeIsActive(); }")
+  push(r, "    private double ftcElapsed() { return getRuntime(); }")
+  push(r, "    private Object ftcResetTimer() { resetRuntime(); return null; }")
+  push(r, "")
+  push(r, "    private Object ftcSetupImu(Object imu, Object logo, Object usb) {")
+  push(r, "        RevHubOrientationOnRobot.LogoFacingDirection l = ftcEnum(RevHubOrientationOnRobot.LogoFacingDirection.class, logo, \"direction\");")
+  push(r, "        RevHubOrientationOnRobot.UsbFacingDirection u = ftcEnum(RevHubOrientationOnRobot.UsbFacingDirection.class, usb, \"direction\");")
+  push(r, "        ((IMU) imu).initialize(new IMU.Parameters(new RevHubOrientationOnRobot(l, u)));")
+  push(r, "        return null;")
+  push(r, "    }")
+  push(r, "    private double ftcHeading(Object imu) { return ((IMU) imu).getRobotYawPitchRollAngles().getYaw(AngleUnit.DEGREES); }")
+  push(r, "    private Object ftcResetHeading(Object imu) { ((IMU) imu).resetYaw(); return null; }")
+  push(r, "")
+  joinList(r, "\n")
+]
