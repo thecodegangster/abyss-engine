@@ -1,0 +1,257 @@
+//@ pack Soft Landing (UI)
+//@ target ui
+// A strip under the game that shows what Soft Landing (compiler) let slide while your game ran.
+//
+//   Status         "No warnings", or how many different mistakes the game made. Tap it to open the list.
+//   A warning      says what went wrong, which line it is on and how many times it happened (x240).
+//                  Tap one to jump to that line in the Code view.
+//   Clear          empties the list. Tap Run and it starts empty anyway.
+//   Keep going     off to start with. When it is on, an error in #update or #draw that Soft Landing
+//   after errors   doesn't already handle (dividing by 0, the wrong kind of value, ...) skips that frame and
+//                  shows up here as a warning, instead of stopping the game.
+//
+// The Keep going choice is remembered in this browser (the key abyss-engine:softlanding).
+// After you turn the pack on, it starts working the next time Abyss Engine loads.
+//
+// Dependencies: Soft Landing (compiler). That pack is what makes the game carry on and collects the
+// warnings. This strip only shows them, so turn on Soft Landing (compiler) too. If it is off, the strip says so.
+// This pack only adds things. It does not replace any of the UI's own functions. Every name it adds starts with sl.
+
+{SL_KEY} = "abyss-engine:softlanding"
+{SL_OPEN_KEY} = "abyss-engine:softlanding-open"
+{SL_SHOWN} = 40
+{slPanel} = false
+{slStatus} = false
+{slKeep} = false
+{slClear} = false
+{slList} = false
+{slNote} = false
+{slOpen} = eq(storeGet(SL_OPEN_KEY), "open")
+{slLastS} = false
+{slLastSize} = 0
+{slCounts} = list()
+{slItems} = list()
+
+// ---------- reaching the warnings ----------
+
+// The warning keeper that the running game made, or false when there isn't one yet.
+#slGet[
+  {w} = doc().defaultView
+  {out} = false
+  @(w.abyssEngine)[ @(w.abyssEngine.K)[ out = w.abyssEngine.K.sl ] ]
+  @(out)[ out ][ false ]
+]
+
+// Is the compiler pack there and on?
+#slCompilerOn[
+  {ok} = false
+  @(H)[
+    @(H.packs)[
+      @(not(H.packs.safe()))[
+        %(H.packs.all(), p)[
+          @(and(get(p, "on"), eq(get(p, "target"), "compiler")))[
+            @(gte(find(H.packs.code(get(p, "id")), "#slPrelude"), 0))[ ok = true ]
+          ]
+        ]
+      ]
+    ]
+  ]
+  ok
+]
+
+#slKeepOn[ eq(storeGet(SL_KEY), "catch") ]
+
+// ---------- what the buttons do ----------
+
+#slToggleKeep[
+  {on} = not(slKeepOn())
+  @(on)[ storeSet(SL_KEY, "catch") ][ storeSet(SL_KEY, "off") ]
+  {s} = slGet()
+  @(s)[ s.catchAll = on ]
+  slSync()
+]
+
+#slClearAll[
+  {s} = slGet()
+  @(s)[ s.clear() ]
+  slLastSize = 0
+  slUpdate()
+]
+
+#slJump(w)[
+  @(eq(w.file, "game"))[
+    {loc} = locate(w.line)
+    errFile = "game"
+    errLine = get(loc, "line")
+    errTab = get(loc, "tab")
+    goToError()
+    errFile = ""
+    errLine = 0
+    renderGutter()
+  ]
+]
+
+// ---------- showing the state ----------
+
+#slOnOff(el, on)[
+  @(on)[ el.dataset.on = "yes" ][ el.dataset.on = "no" ]
+]
+
+#slSync[
+  @(slPanel)[
+    {on} = slKeepOn()
+    slOnOff(slKeep, on)
+    @(on)[ slKeep.textContent = "Keep going after errors: on" ][ slKeep.textContent = "Keep going after errors: off" ]
+    slNote.hidden = slCompilerOn()
+  ]
+]
+
+#slWhere(w)[
+  {t} = join("line ", w.line)
+  @(eq(w.file, "game"))[
+    {loc} = locate(w.line)
+    t = join("line ", get(loc, "line"))
+    @(gt(get(loc, "tab"), 0))[ t = join(get(gameNames, get(loc, "tab")), ", ", t) ]
+  ][
+    @(not(w.line))[ t = "the engine" ]
+  ]
+  t
+]
+
+#slCountText(w)[
+  @(gt(w.count, 1))[ join("x", w.count) ][ "" ]
+]
+
+#slRender(s)[
+  slList.innerHTML = ""
+  slCounts = list()
+  slItems = list()
+  %(min(size(s.list), SL_SHOWN), i)[
+    {w} = get(s.list, i)
+    {row} = slAdd(slList, "button", "sl-row", "")
+    row.type = "button"
+    slAdd(row, "span", "sl-msg", w.msg)
+    {meta} = slAdd(row, "span", "sl-meta", "")
+    slAdd(meta, "span", "sl-where", slWhere(w))
+    push(slCounts, slAdd(meta, "span", "sl-count", slCountText(w)))
+    push(slItems, w)
+    on(row, "click", #(e)[ slJump(w) ])
+  ]
+  @(gt(size(s.list), SL_SHOWN))[
+    slAdd(slList, "div", "sl-more", join("...and ", sub(size(s.list), SL_SHOWN), " more mistakes."))
+  ]
+]
+
+#slUpdate[
+  @(slPanel)[
+    {s} = slGet()
+    @(not(s))[
+      slStatus.textContent = "Soft Landing: run the game to see warnings"
+      slOnOff(slStatus, false)
+      slClear.hidden = true
+      slList.hidden = true
+      slLastS = false
+      slLastSize = 0
+    ][
+      {n} = size(s.list)
+      @(or(neq(s, slLastS), neq(n, slLastSize)))[
+        slRender(s)
+        slLastS = s
+        slLastSize = n
+      ]
+      %(size(slItems), i)[
+        {c} = get(slCounts, i)
+        c.textContent = slCountText(get(slItems, i))
+      ]
+      {text} = "Soft Landing: no warnings"
+      @(gt(n, 0))[
+        text = join("Soft Landing: ", n, " mistake(s) let through, ", s.total, " time(s)")
+        @(gt(s.dropped, 0))[ text = join(text, " (and more)") ]
+        @(slOpen)[ text = join(text, " ▴") ][ text = join(text, " ▾") ]
+      ]
+      slStatus.textContent = text
+      slOnOff(slStatus, gt(n, 0))
+      slClear.hidden = eq(n, 0)
+      slList.hidden = or(not(slOpen), eq(n, 0))
+    ]
+  ]
+]
+
+// ---------- building the strip ----------
+
+#slCss[
+  {r} = list()
+  push(r, ".sl{flex:none;display:flex;flex-direction:column;gap:6px;padding:6px 8px;background:var(--trench);border-top:1px solid var(--line)}")
+  push(r, ".sl-row-head{display:flex;flex-wrap:wrap;gap:6px;align-items:center}")
+  push(r, ".sl-btn{height:32px;padding:0 11px;border-radius:9px;background:var(--reef);color:var(--foam);font-weight:650;font-size:13px}")
+  push(r, ".sl-btn[data-on=yes]{background:var(--skin);color:#fff}")
+  push(r, ".sl-list{display:flex;flex-direction:column;gap:4px;max-height:34vh;overflow:auto}")
+  push(r, ".sl-row{display:flex;flex-direction:column;gap:2px;text-align:left;padding:6px 8px;border-radius:8px;background:var(--reef);color:var(--foam);font-size:13px}")
+  push(r, ".sl-msg{overflow-wrap:anywhere}")
+  push(r, ".sl-meta{display:flex;gap:8px;font-size:12px;color:var(--mist)}")
+  push(r, ".sl-count{font-weight:750;color:#ffd6a0}")
+  push(r, ".sl-more{font-size:12px;color:var(--mist);padding:2px 4px}")
+  push(r, ".sl-note{font-size:12.5px;color:#ffd6de;background:#3a1622;border-radius:8px;padding:6px 8px}")
+  joinList(r, "\n")
+]
+
+#slAdd(parent, tag, cls, label)[
+  {el} = make(tag)
+  el.className = cls
+  el.textContent = label
+  parent.appendChild(el)
+  el
+]
+
+#slButton(parent, label, fn)[
+  {b} = slAdd(parent, "button", "sl-btn", label)
+  b.type = "button"
+  b.dataset.on = "no"
+  on(b, "click", fn)
+  b
+]
+
+#slInstall[
+  @(not(dom("#slPanel")))[
+    {st} = make("style")
+    st.textContent = slCss()
+    doc().head.appendChild(st)
+
+    slPanel = make("div")
+    slPanel.id = "slPanel"
+    slPanel.className = "sl"
+    dom(".stage-pane").insertBefore(slPanel, dom("#log"))
+
+    {head} = slAdd(slPanel, "div", "sl-row-head", "")
+    slStatus = slButton(head, "Soft Landing", #(e)[
+      slOpen = not(slOpen)
+      storeSet(SL_OPEN_KEY, "closed")
+      @(slOpen)[ storeSet(SL_OPEN_KEY, "open") ]
+      slUpdate()
+    ])
+    slClear = slButton(head, "Clear", #(e)[ slClearAll() ])
+    slClear.hidden = true
+    slKeep = slButton(head, "Keep going after errors: off", #(e)[ slToggleKeep() ])
+
+    slList = slAdd(slPanel, "div", "sl-list", "")
+    slList.hidden = true
+    slNote = slAdd(slPanel, "div", "sl-note", "Turn on the Soft Landing (compiler) pack in the Packs view, then tap Run. Until then nothing is let through and nothing shows here.")
+    slNote.hidden = true
+
+    slSync()
+    slUpdate()
+    slTick()
+  ]
+  true
+]
+
+// Looks at the warnings a few times a second while the game runs.
+#slTick[
+  later(300, #[
+    slUpdate()
+    slSync()
+    slTick()
+  ])
+]
+
+{slInstalled} = slInstall()

@@ -1,0 +1,861 @@
+//@ pack Bundles (UI)
+//@ target ui
+// Adds a Bundles tab next to Play, Code, Audio and Packs. A bundle is a named, ordered set of packs, so you can
+// swap between whole collections of packs with one tap instead of toggling them one by one in the Packs view.
+//
+//   Switch         Turns exactly the bundle's packs on and every other pack off, then puts the bundle's packs in the
+//                  bundle's order. If a pack needs another pack, that one is turned on too and goes first.
+//   Base           A built-in bundle with nothing in it. Switching to it turns everything off (except the packs
+//                  you pinned, and this pack), which gets you back to plain Abyss Engine.
+//   Add on top     An option. When it is ticked, switching keeps what is already on and only adds the bundle's packs.
+//   Always on      Packs you pin there stay on whatever bundle you switch to, like tools you always want. This
+//                  pack (Bundles) can never be turned off by a switch, so the tab can't disappear on you.
+//   Dependencies   Reads each pack's "Dependencies:" comment, the same way Merge Packs does. Packs a bundle needs
+//                  are added to it when you add a pack, and turned on first when you switch. A pack that lists
+//                  dependencies that match no installed pack is flagged.
+//   Safety         Switching a bundle that would turn on a pack for the UI, Save, Compiler or Packer asks first,
+//                  like the Packs view does. Undo last switch puts the on/off state and order back.
+//   Changed        A bundle shows \"changed\" when you switched to it and then turned packs on or off by hand.
+//   Sharing        Export a bundle as a text file or copy its text. Tick Include pack code and it carries the packs
+//                  too, so the other person doesn't need them. Imported packs are added but left turned off.
+//
+// Bundles are saved in this browser (the key abyss-engine:bundles). They refer to packs by name, so they still work if
+// a pack is deleted and imported again. Packs for the UI, Save and Packer start working the next time Abyss Engine loads.
+//
+// Dependencies: none. It uses the built-in Packer (the host's packs tools) and the UI's own packsChanged, renderPacks
+// and toast. It does not need any other pack.
+// This pack only adds things. It does not replace any of the UI's own functions. Every name it adds starts with bnd
+// or BND_.
+
+{BND_KEY} = "abyss-engine:bundles"
+{BND_BASE} = "base"
+{BND_RISKY} = list("ui", "store", "compiler", "packs")
+
+// ---------- state ----------
+{bndData} = false
+{bndSel} = ""
+{bndArmed} = ""
+{bndFresh} = ""
+{bndInclude} = false
+{bndMsg} = ""
+{bndNotes} = list()
+{bndRoot} = false
+
+// ---------- look ----------
+#bndCss[
+  {r} = list()
+  push(r, ".main[data-view=bundles] { grid-template-columns: minmax(0, 1fr); }")
+  push(r, ".main[data-view=bundles] .stage-pane, .main[data-view=bundles] .code-pane { display: none; }")
+  push(r, ".main[data-view=bundles] #bundles { display: flex; }")
+  push(r, ".bnd-wrap { max-width: 760px; display: flex; flex-direction: column; gap: 14px; padding-bottom: 40px; }")
+  push(r, ".bnd-card { background: var(--trench); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }")
+  push(r, ".bnd-h { font-weight: 700; font-size: 15px; margin: 0 0 4px; }")
+  push(r, ".bnd-note { color: var(--mist); font-size: 13px; margin: 2px 0 8px; overflow-wrap: anywhere; }")
+  push(r, ".bnd-note.bnd-warn { color: #ffe9c7; background: #3a2c16; border-radius: 8px; padding: 8px 10px; }")
+  push(r, ".bnd-note.bnd-bad { color: #ffd6de; background: #3a1622; border-radius: 8px; padding: 8px 10px; }")
+  push(r, ".bnd-label { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--mist); margin: 12px 0 4px; }")
+  push(r, ".bnd-row { display: flex; align-items: center; gap: 6px; background: var(--deep); border-radius: 10px; padding: 4px 6px 4px 12px; margin: 6px 0; }")
+  push(r, ".bnd-row[data-on=yes] { outline: 2px solid var(--glow); }")
+  push(r, ".bnd-info { flex: 1; min-width: 0; padding: 4px 0; }")
+  push(r, ".bnd-name { font-weight: 600; overflow-wrap: anywhere; }")
+  push(r, ".bnd-sub { color: var(--mist); font-size: 12.5px; overflow-wrap: anywhere; }")
+  push(r, ".bnd-tag { font-size: 11px; color: var(--glow); }")
+  push(r, ".bnd-tag.bnd-changed { color: var(--sand); }")
+  push(r, ".bnd-mini { flex: none; padding: 7px 11px; border-radius: 8px; background: var(--reef); color: var(--foam); font-weight: 650; font-size: 13px; }")
+  push(r, ".bnd-mini:disabled { opacity: .4; }")
+  push(r, ".bnd-mini.bnd-go { background: var(--skin); color: #fff; }")
+  push(r, ".bnd-mini.bnd-armed { background: var(--skin); color: #fff; }")
+  push(r, ".bnd-line { display: flex; align-items: center; gap: 6px; padding: 5px 0; border-top: 1px solid var(--line); }")
+  push(r, ".bnd-lname { flex: 1; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }")
+  push(r, ".bnd-lname.bnd-gone { color: #ffb3c1; }")
+  push(r, ".bnd-btns { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }")
+  push(r, ".bnd-btns .btn:disabled { opacity: .4; }")
+  push(r, ".bnd-check { display: flex; gap: 8px; align-items: center; padding: 5px 0; font-size: 14px; }")
+  push(r, ".bnd-check input { width: 18px; height: 18px; flex: none; accent-color: var(--skin); }")
+  push(r, ".bnd-check small { color: var(--mist); font-size: 12.5px; }")
+  push(r, ".bnd-input { width: 100%; height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--abyss); color: var(--foam); font: 600 14px system-ui, sans-serif; }")
+  push(r, ".bnd-text { width: 100%; min-height: 90px; resize: vertical; margin-top: 6px; background: var(--abyss); color: var(--foam); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }")
+  push(r, "@media (max-width: 560px) { .bar { gap: 6px; padding: 8px 6px; } .views { min-width: 0; overflow-x: auto; scrollbar-width: none; } .views::-webkit-scrollbar { display: none; } .views button { flex: none; padding: 6px 8px; font-size: 13px; } .bar .btn { padding: 0 10px; } }")
+  push(r, "@media (max-width: 480px) { .brand { display: none; } }")
+  joinList(r, "\n")
+]
+
+// ---------- small helpers ----------
+#bndAdd(parent, tag, cls, label)[
+  {el} = make(tag)
+  el.className = cls
+  el.textContent = label
+  parent.appendChild(el)
+  el
+]
+
+#bndButton(parent, cls, label, fn)[
+  {b} = bndAdd(parent, "button", cls, label)
+  b.type = "button"
+  on(b, "click", fn)
+  b
+]
+
+#bndCheck(parent, label, detail, checked, fn)[
+  {lab} = bndAdd(parent, "label", "bnd-check", "")
+  {cb} = bndAdd(lab, "input", "", "")
+  cb.type = "checkbox"
+  cb.checked = checked
+  on(cb, "change", #(e)[ fn(cb.checked) ])
+  bndAdd(lab, "span", "", label)
+  @(size(detail))[ bndAdd(lab, "small", "", detail) ]
+  lab
+]
+
+#bndPlural(n, one, many)[ @(eq(n, 1))[ join(n, " ", one) ][ join(n, " ", many) ] ]
+
+#bndSay(msg, notes)[
+  bndMsg = msg
+  bndNotes = notes
+]
+
+// ---------- saved bundles ----------
+#bndLoad[
+  @(not(bndData))[
+    {d} = false
+    {raw} = storeGet(BND_KEY)
+    @(raw)[ d = jsonRead(raw) ]
+    @(not(d))[ d = map() ]
+    @(not(has(d, "items")))[ put(d, "items", list()) ]
+    @(not(has(d, "pinned")))[ put(d, "pinned", list()) ]
+    @(not(has(d, "additive")))[ put(d, "additive", false) ]
+    @(not(has(d, "active")))[ put(d, "active", "") ]
+    @(not(has(d, "undo")))[ put(d, "undo", false) ]
+    bndData = d
+  ]
+  bndData
+]
+
+#bndSave[ storeSet(BND_KEY, jsonWrite(bndLoad())) ]
+
+#bndNewId[ join(clock(), "-", random(0, 999999)) ]
+
+// The built-in bundle with nothing in it.
+#bndBase[
+  {b} = map()
+  put(b, "id", BND_BASE)
+  put(b, "name", "Base")
+  put(b, "packs", list())
+  b
+]
+
+// Base first, then the saved ones.
+#bndAll[
+  {out} = list(bndBase())
+  %(get(bndLoad(), "items"), b)[ push(out, b) ]
+  out
+]
+
+#bndGet(id)[
+  {found} = false
+  %(bndAll(), b)[ @(eq(get(b, "id"), id))[ found = b ] ]
+  found
+]
+
+#bndNameTaken(name)[
+  {taken} = false
+  %(bndAll(), b)[ @(eq(get(b, "name"), name))[ taken = true ] ]
+  taken
+]
+
+// ---------- looking at packs ----------
+#bndRowByName(rows, name)[
+  {found} = false
+  %(rows, r)[ @(and(not(found), eq(get(r, "name"), name)))[ found = r ] ]
+  found
+]
+
+#bndPos(id)[
+  {k} = -1
+  {rs} = H.packs.all()
+  %(size(rs), i)[ @(eq(get(get(rs, i), "id"), id))[ k = i ] ]
+  k
+]
+
+#bndIsRisky(r)[ has(BND_RISKY, get(r, "target")) ]
+
+// The names of the packs that are this pack, so a switch never turns it off.
+#bndSelfNames(rows)[
+  {out} = list()
+  %(rows, r)[ @(has(H.packs.code(get(r, "id")), "#bndInstall["))[ push(out, get(r, "name")) ] ]
+  out
+]
+
+// Names of installed packs that stay on through every switch: the pinned ones, and this pack.
+#bndPinned(rows)[
+  {pins} = get(bndLoad(), "pinned")
+  {selfs} = bndSelfNames(rows)
+  {out} = list()
+  %(rows, r)[
+    {nm} = get(r, "name")
+    @(not(has(out, nm)))[
+      @(or(has(pins, nm), has(selfs, nm)))[ push(out, nm) ]
+    ]
+  ]
+  out
+]
+
+#bndOnNames(rows)[
+  {out} = list()
+  %(rows, r)[ @(and(get(r, "on"), get(r, "valid")))[ push(out, get(r, "name")) ] ]
+  out
+]
+
+#bndSameSet(a, b)[
+  {same} = true
+  %(a, x)[ @(not(has(b, x)))[ same = false ] ]
+  %(b, y)[ @(not(has(a, y)))[ same = false ] ]
+  same
+]
+
+// ---------- dependencies ----------
+// The first sentence of a pack's "Dependencies:" comment (empty if it has none).
+#bndDeps(code)[
+  {acc} = ""
+  {state} = 0
+  %(split(code, "\n"), line)[
+    @(eq(state, 0))[
+      @(eq(slice(line, 0, 16), "// Dependencies:"))[
+        acc = slice(line, 16, size(line))
+        state = 1
+        @(eq(slice(line, sub(size(line), 1), size(line)), "."))[ state = 2 ]
+      ]
+    ][
+      @(eq(state, 1))[
+        @(and(gt(size(line), 2), eq(slice(line, 0, 2), "//"), neq(slice(line, 0, 3), "//@")))[
+          acc = join(acc, " ", slice(line, 2, size(line)))
+          @(eq(slice(line, sub(size(line), 1), size(line)), "."))[ state = 2 ]
+        ][ state = 2 ]
+      ]
+    ]
+  ]
+  {stop} = find(acc, ". ", 0)
+  @(gte(stop, 0))[ acc = slice(acc, 0, add(stop, 1)) ]
+  acc
+]
+
+// The installed packs (other than r) that r's Dependencies comment names.
+#bndDepRows(rows, r)[
+  {out} = list()
+  {deps} = bndDeps(H.packs.code(get(r, "id")))
+  @(not(has(slice(lower(deps), 0, 8), "none")))[
+    %(rows, q)[
+      @(and(neq(get(q, "id"), get(r, "id")), gt(size(get(q, "name")), 0)))[
+        @(has(deps, get(q, "name")))[
+          {first} = bndRowByName(rows, get(q, "name"))
+          @(eq(get(first, "id"), get(q, "id")))[ push(out, q) ]
+        ]
+      ]
+    ]
+  ]
+  out
+]
+
+// A warning when a pack lists dependencies but none of them match an installed pack. Empty when all is well.
+#bndDepNote(rows, r)[
+  {deps} = bndDeps(H.packs.code(get(r, "id")))
+  {low} = lower(deps)
+  {note} = ""
+  @(and(size(deps), not(has(low, "none")), not(has(low, "built-in"))))[
+    @(not(size(bndDepRows(rows, r))))[
+      note = join(get(r, "name"), " lists dependencies that don't match an installed pack:", deps)
+    ]
+  ]
+  note
+]
+
+// Which packs would be turned on for these pack names. Gives a map with:
+//   order    rows to turn on, a pack's dependencies first
+//   added    notes about packs pulled in because another pack needs them
+//   missing  names that aren't installed
+#bndPlan(rows, names)[
+  {order} = list()
+  {added} = list()
+  {missing} = list()
+  {seen} = map()
+  {wanted} = map()
+  %(names, n)[ put(wanted, n, true) ]
+  #visit(r, who)[
+    @(not(has(seen, get(r, "id"))))[
+      put(seen, get(r, "id"), true)
+      %(bndDepRows(rows, r), q)[ visit(q, get(r, "name")) ]
+      push(order, r)
+      @(and(who, not(has(wanted, get(r, "name")))))[
+        push(added, join(get(r, "name"), " (needed by ", who, ")"))
+      ]
+    ]
+  ]
+  %(names, n)[
+    {found} = bndRowByName(rows, n)
+    @(found)[ visit(found, false) ][ push(missing, n) ]
+  ]
+  {out} = map()
+  put(out, "order", order)
+  put(out, "added", added)
+  put(out, "missing", missing)
+  out
+]
+
+// The pack names that should be on after switching to b.
+#bndWantNames(rows, b)[
+  {plan} = bndPlan(rows, get(b, "packs"))
+  {out} = list()
+  %(get(plan, "order"), r)[ @(get(r, "valid"))[ push(out, get(r, "name")) ] ]
+  %(bndPinned(rows), n)[ @(not(has(out, n)))[ push(out, n) ] ]
+  out
+]
+
+// "", "active", or "changed" (it was switched to, and packs were turned on or off by hand since).
+#bndStatus(b, rows)[
+  {s} = ""
+  @(eq(get(bndLoad(), "active"), get(b, "id")))[
+    s = "active"
+    @(not(bndSameSet(bndWantNames(rows, b), bndOnNames(rows))))[ s = "changed" ]
+  ]
+  s
+]
+
+// Names of packs that are on right now, except the ones that stay on anyway.
+#bndCurrentNames[
+  {rows} = H.packs.all()
+  {pins} = bndPinned(rows)
+  {out} = list()
+  %(rows, r)[
+    @(and(get(r, "on"), get(r, "valid"), not(has(pins, get(r, "name")))))[ push(out, get(r, "name")) ]
+  ]
+  out
+]
+
+// ---------- changing the packs ----------
+// Makes these packs sit in this order in the Packs list (a pack not in the list keeps its place relative to the rest).
+#bndReorder(ids)[
+  %(size(ids), i)[
+    @(gt(i, 0))[
+      {guard} = 0
+      %(and(lt(bndPos(get(ids, i)), bndPos(get(ids, sub(i, 1)))), lt(guard, 300)))[
+        H.packs.move(get(ids, i), 1)
+        guard = add(guard, 1)
+      ]
+    ]
+  ]
+  true
+]
+
+// What is on and in which order, so Undo can put it back.
+#bndSnapshot[
+  {s} = map()
+  {onIds} = list()
+  {order} = list()
+  %(H.packs.all(), r)[
+    push(order, get(r, "id"))
+    @(get(r, "on"))[ push(onIds, get(r, "id")) ]
+  ]
+  put(s, "on", onIds)
+  put(s, "order", order)
+  put(s, "active", get(bndLoad(), "active"))
+  s
+]
+
+#bndSwitch(b)[
+  @(H.packs)[
+    {rows} = H.packs.all()
+    {plan} = bndPlan(rows, get(b, "packs"))
+    {pins} = bndPinned(rows)
+    {layer} = and(get(bndLoad(), "additive"), neq(get(b, "id"), BND_BASE))
+    {want} = map()
+    %(get(plan, "order"), r)[ put(want, get(r, "id"), true) ]
+    %(rows, r)[
+      @(has(pins, get(r, "name")))[ put(want, get(r, "id"), true) ]
+      @(and(layer, get(r, "on")))[ put(want, get(r, "id"), true) ]
+    ]
+    {turnOn} = list()
+    {turnOff} = list()
+    %(rows, r)[
+      @(get(r, "valid"))[
+        @(and(has(want, get(r, "id")), not(get(r, "on"))))[ push(turnOn, r) ]
+        @(and(not(has(want, get(r, "id"))), get(r, "on")))[ push(turnOff, r) ]
+      ]
+    ]
+    {risky} = keep(turnOn, #(r)[ bndIsRisky(r) ])
+    @(size(risky))[
+      {shown} = list()
+      %(risky, r)[ push(shown, join(escape(get(r, "name")), " (", get(r, "target"), ")")) ]
+      libText.innerHTML = join("Switch to <b>", escape(get(b, "name")), "</b>? It turns on packs that change how Abyss Engine itself works: <b>", joinList(shown, "</b>, <b>"), "</b>. Only do this if you trust them.")
+      libList = list()
+      libGo = #[ bndApply(b, turnOn, turnOff, plan, layer, rows) ]
+      libBlockMsg = "Stayed with the packs that were on."
+      libBar.hidden = false
+    ][ bndApply(b, turnOn, turnOff, plan, layer, rows) ]
+  ]
+  true
+]
+
+#bndApply(b, turnOn, turnOff, plan, layer, rows)[
+  {data} = bndLoad()
+  put(data, "undo", bndSnapshot())
+  %(turnOff, r)[ H.packs.setOn(get(r, "id"), false) ]
+  %(turnOn, r)[ H.packs.setOn(get(r, "id"), true) ]
+  {ids} = list()
+  %(get(plan, "order"), r)[ @(get(r, "valid"))[ push(ids, get(r, "id")) ] ]
+  bndReorder(ids)
+  put(data, "active", "")
+  @(not(layer))[ put(data, "active", get(b, "id")) ]
+  bndSave()
+
+  {notes} = list()
+  %(get(plan, "missing"), nm)[ push(notes, join(quote(nm), " isn't installed, so it was skipped.")) ]
+  %(get(plan, "added"), a)[ push(notes, join("Also turned on ", a, ".")) ]
+  {later1} = false
+  %(get(plan, "order"), r)[
+    {dn} = bndDepNote(rows, r)
+    @(size(dn))[ push(notes, dn) ]
+  ]
+  %(turnOn, r)[ @(has(list("ui", "store", "packs"), get(r, "target")))[ later1 = true ] ]
+  %(turnOff, r)[ @(has(list("ui", "store", "packs"), get(r, "target")))[ later1 = true ] ]
+  @(later1)[ push(notes, "Packs for the UI, Save and Packer start working the next time Abyss Engine loads.") ]
+  @(H.packs.safe())[ push(notes, "Safe mode is on, so no packs are applied until you turn it off in the Packs view.") ]
+
+  {verb} = "Switched to "
+  @(layer)[ verb = "Added " ]
+  {msg} = join(verb, get(b, "name"), ": ", size(turnOn), " turned on, ", size(turnOff), " turned off.")
+  bndSay(msg, notes)
+  bndRender()
+  toast(msg)
+  packsChanged()
+  renderPacks()
+  true
+]
+
+#bndUndo[
+  {data} = bndLoad()
+  {s} = get(data, "undo")
+  @(s)[
+    %(H.packs.all(), r)[
+      @(get(r, "valid"))[ H.packs.setOn(get(r, "id"), has(get(s, "on"), get(r, "id"))) ]
+    ]
+    {ids} = list()
+    %(get(s, "order"), id)[
+      @(and(has(get(s, "on"), id), gte(bndPos(id), 0)))[ push(ids, id) ]
+    ]
+    bndReorder(ids)
+    put(data, "active", get(s, "active"))
+    put(data, "undo", false)
+    bndSave()
+    bndSay("Put the packs back the way they were before the last switch.", list())
+    bndRender()
+    toast("Undid the last switch.")
+    packsChanged()
+    renderPacks()
+  ]
+  true
+]
+
+// ---------- editing bundles ----------
+#bndNew(names, name, focus)[
+  {b} = map()
+  put(b, "id", bndNewId())
+  put(b, "name", name)
+  put(b, "packs", names)
+  push(get(bndLoad(), "items"), b)
+  bndSay("", list())
+  bndSel = get(b, "id")
+  bndFresh = ""
+  @(focus)[ bndFresh = get(b, "id") ]
+  bndSave()
+  bndRender()
+  b
+]
+
+#bndDuplicate(b)[
+  {name} = join(get(b, "name"), " copy")
+  bndNew(keep(get(b, "packs"), #(x)[ true ]), slice(name, 0, 40), true)
+]
+
+#bndDelete(id)[
+  @(neq(bndArmed, id))[
+    bndArmed = id
+    bndRender()
+  ][
+    bndArmed = ""
+    bndSay("", list())
+    {data} = bndLoad()
+    put(data, "items", keep(get(data, "items"), #(b)[ neq(get(b, "id"), id) ]))
+    @(eq(get(data, "active"), id))[ put(data, "active", "") ]
+    @(eq(bndSel, id))[ bndSel = "" ]
+    bndSave()
+    bndRender()
+  ]
+]
+
+#bndEdit(id)[
+  @(eq(bndSel, id))[ bndSel = "" ][ bndSel = id ]
+  bndSay("", list())
+  bndArmed = ""
+  bndFresh = ""
+  bndRender()
+]
+
+#bndMoveIn(b, i, dir)[
+  {lst} = get(b, "packs")
+  {to} = add(i, dir)
+  @(and(gte(to, 0), lt(to, size(lst))))[
+    {tmp} = get(lst, i)
+    put(lst, i, get(lst, to))
+    put(lst, to, tmp)
+    bndSave()
+    bndRender()
+  ]
+]
+
+#bndRemoveFrom(b, i)[
+  {lst} = get(b, "packs")
+  {nm} = get(lst, i)
+  removeAt(lst, i)
+  bndSave()
+  {rows} = H.packs.all()
+  {users} = list()
+  %(lst, other)[
+    {r} = bndRowByName(rows, other)
+    @(r)[
+      %(bndDepRows(rows, r), q)[ @(eq(get(q, "name"), nm))[ push(users, other) ] ]
+    ]
+  ]
+  @(size(users))[
+    toast(join(joinList(users, ", "), " needs ", nm, ", so it still gets turned on with it."))
+  ]
+  bndRender()
+]
+
+// Adds a pack, and the packs it needs, to a bundle.
+#bndAddPack(b, name)[
+  {rows} = H.packs.all()
+  {plan} = bndPlan(rows, list(name))
+  {lst} = get(b, "packs")
+  {extra} = list()
+  %(get(plan, "order"), r)[
+    {nm} = get(r, "name")
+    @(not(has(lst, nm)))[
+      push(lst, nm)
+      @(neq(nm, name))[ push(extra, nm) ]
+    ]
+  ]
+  bndSave()
+  @(size(extra))[ toast(join("Added ", name, ". Also added ", joinList(extra, ", "), ", which it needs.")) ]
+  bndRender()
+]
+
+// ---------- sharing ----------
+#bndExportText(b, withCode)[
+  {rows} = H.packs.all()
+  {parts} = list(join("//@ bundle ", get(b, "name")))
+  %(get(b, "packs"), nm)[ push(parts, join("//@ has ", nm)) ]
+  @(withCode)[
+    {plan} = bndPlan(rows, get(b, "packs"))
+    %(get(plan, "order"), r)[
+      push(parts, "//@@ code-begin")
+      push(parts, H.packs.code(get(r, "id")))
+      push(parts, "//@@ code-end")
+    ]
+  ]
+  join(joinList(parts, "\n"), "\n")
+]
+
+#bndImportText(txt)[
+  {name} = ""
+  {names} = list()
+  {codes} = list()
+  {buf} = false
+  %(split(txt, "\n"), raw)[
+    {line} = raw
+    @(eq(slice(line, sub(size(line), 1), size(line)), "\r"))[ line = slice(line, 0, sub(size(line), 1)) ]
+    @(buf)[
+      @(eq(line, "//@@ code-end"))[
+        push(codes, joinList(buf, "\n"))
+        buf = false
+      ][ push(buf, raw) ]
+    ][
+      @(eq(line, "//@@ code-begin"))[ buf = list() ]
+      @(eq(slice(line, 0, 11), "//@ bundle "))[ name = slice(line, 11, size(line)) ]
+      @(eq(slice(line, 0, 8), "//@ has "))[ push(names, slice(line, 8, size(line))) ]
+    ]
+  ]
+  {made} = 0
+  {kept} = 0
+  {codeNames} = list()
+  %(codes, code)[
+    {pn} = get(H.packs.meta(code), "name")
+    push(codeNames, pn)
+    @(bndRowByName(H.packs.all(), pn))[ kept = add(kept, 1) ][
+      H.packs.newPack(code, H.files)
+      made = add(made, 1)
+    ]
+  ]
+  @(not(size(names)))[ names = codeNames ]
+  @(or(not(size(name)), not(size(names))))[
+    bndSay("That doesn't look like a bundle. A bundle file starts with a //@ bundle line and has a //@ has line for each pack.", list())
+    bndRender()
+    toast("That doesn't look like a bundle.")
+  ][
+    {final} = slice(name, 0, 40)
+    {k} = 2
+    %(bndNameTaken(final))[
+      final = join(slice(name, 0, 36), " ", k)
+      k = add(k, 1)
+    ]
+    bndNew(names, final, false)
+    {msg} = join("Imported ", final, ".")
+    @(gt(made, 0))[ msg = join(msg, " ", bndPlural(made, "pack was", "packs were"), " added and left turned off. Read them in the Packs view before you switch.") ]
+    @(gt(kept, 0))[ msg = join(msg, " ", bndPlural(kept, "pack was", "packs were"), " already installed, so yours were kept.") ]
+    bndSay(msg, list())
+    bndRender()
+    renderPacks()
+    toast(join("Imported ", final, "."))
+  ]
+  true
+]
+
+#bndImportFile[
+  H.pickFile(#(t)[
+    @(t)[ bndImportText(t) ][ toast("Couldn't read that file.") ]
+  ])
+]
+
+// ---------- showing the tab ----------
+#bndRenderList[
+  {rows} = H.packs.all()
+  {data} = bndLoad()
+  {card} = bndAdd(bndRoot, "div", "bnd-card", "")
+  bndAdd(card, "div", "bnd-h", "Bundles")
+  bndAdd(card, "div", "bnd-note", "A bundle is a named set of packs. Switch to one to turn exactly those packs on and the rest off. Packs a bundle needs are turned on with it.")
+  @(H.packs.safe())[
+    bndAdd(card, "div", "bnd-note bnd-bad", "Safe mode is on, so no packs are applied. Switching still changes which packs are on. Turn Safe mode off in the Packs view.")
+  ]
+  bndCheck(card, "Add on top instead of replacing", "off: switching turns the other packs off", get(data, "additive"), #(v)[
+    put(data, "additive", v)
+    bndSave()
+    bndRender()
+  ])
+  bndAdd(card, "div", "bnd-label", "Your bundles")
+  %(bndAll(), b)[
+    {id} = get(b, "id")
+    {status} = bndStatus(b, rows)
+    {row} = bndAdd(card, "div", "bnd-row", "")
+    row.dataset.on = "no"
+    @(size(status))[ row.dataset.on = "yes" ]
+    {info} = bndAdd(row, "div", "bnd-info", "")
+    bndAdd(info, "div", "bnd-name", get(b, "name"))
+    {sub1} = bndPlural(size(get(b, "packs")), "pack", "packs")
+    @(eq(id, BND_BASE))[ sub1 = "Everything off, except pinned packs and this one" ]
+    bndAdd(info, "div", "bnd-sub", sub1)
+    @(size(status))[
+      {tag} = bndAdd(row, "span", "bnd-tag", status)
+      @(eq(status, "changed"))[ tag.className = "bnd-tag bnd-changed" ]
+    ]
+    {go} = bndButton(row, "bnd-mini bnd-go", "Switch", #(e)[ bndSwitch(b) ])
+    @(eq(status, "active"))[ go.disabled = true ]
+    @(neq(id, BND_BASE))[
+      bndButton(row, "bnd-mini", "Edit", #(e)[ bndEdit(id) ])
+      {del} = bndButton(row, "bnd-mini", "×", #(e)[ bndDelete(id) ])
+      @(eq(bndArmed, id))[
+        del.textContent = "Delete?"
+        del.className = "bnd-mini bnd-armed"
+      ]
+    ]
+  ]
+  @(size(bndMsg))[ bndAdd(card, "div", "bnd-note", bndMsg) ]
+  %(bndNotes, n)[ bndAdd(card, "div", "bnd-note bnd-warn", n) ]
+  {btns} = bndAdd(card, "div", "bnd-btns", "")
+  bndButton(btns, "btn run", "+ New bundle", #(e)[ bndNew(list(), "New bundle", true) ])
+  bndButton(btns, "btn", "Save current packs", #(e)[ bndNew(bndCurrentNames(), "My packs", true) ])
+  {undoBtn} = bndButton(btns, "btn", "Undo last switch", #(e)[ bndUndo() ])
+  undoBtn.disabled = not(get(data, "undo"))
+  bndButton(btns, "btn", "Import file", #(e)[ bndImportFile() ])
+  true
+]
+
+#bndRenderEditor[
+  {b} = bndGet(bndSel)
+  @(and(b, neq(bndSel, BND_BASE)))[
+    {rows} = H.packs.all()
+    {names} = get(b, "packs")
+    {selfs} = bndSelfNames(rows)
+    {card} = bndAdd(bndRoot, "div", "bnd-card", "")
+    bndAdd(card, "div", "bnd-h", "Edit bundle")
+    {inp} = bndAdd(card, "input", "bnd-input", "")
+    inp.type = "text"
+    inp.value = get(b, "name")
+    inp.placeholder = "Bundle name"
+    inp.setAttribute("aria-label", "Bundle name")
+    on(inp, "change", #(e)[
+      {clean} = get(split(inp.value, "\n"), 0)
+      @(size(clean))[
+        put(b, "name", slice(clean, 0, 40))
+        bndSave()
+        bndRender()
+      ]
+    ])
+
+    bndAdd(card, "div", "bnd-label", "Packs in this bundle, in the order they turn on")
+    @(not(size(names)))[ bndAdd(card, "div", "bnd-note", "Nothing in it yet. Add packs below.") ]
+    %(size(names), i)[
+      {nm} = get(names, i)
+      {r} = bndRowByName(rows, nm)
+      {line} = bndAdd(card, "div", "bnd-line", "")
+      {label} = join(nm, "  ·  not installed")
+      @(r)[ label = join(nm, "  ·  ", get(r, "target")) ]
+      {el} = bndAdd(line, "div", "bnd-lname", label)
+      @(not(r))[ el.className = "bnd-lname bnd-gone" ]
+      bndButton(line, "bnd-mini", "▲", #(e)[ bndMoveIn(b, i, -1) ])
+      bndButton(line, "bnd-mini", "▼", #(e)[ bndMoveIn(b, i, 1) ])
+      bndButton(line, "bnd-mini", "×", #(e)[ bndRemoveFrom(b, i) ])
+      @(r)[
+        %(bndDepRows(rows, r), q)[
+          @(not(has(names, get(q, "name"))))[
+            bndAdd(card, "div", "bnd-sub", join("Needs ", get(q, "name"), ", which is turned on with it."))
+          ]
+        ]
+        {dn} = bndDepNote(rows, r)
+        @(size(dn))[ bndAdd(card, "div", "bnd-note bnd-warn", dn) ]
+      ]
+    ]
+
+    bndAdd(card, "div", "bnd-label", "Add a pack")
+    {any} = false
+    %(rows, r)[
+      {nm2} = get(r, "name")
+      @(and(not(has(names, nm2)), not(has(selfs, nm2))))[
+        any = true
+        {line2} = bndAdd(card, "div", "bnd-line", "")
+        bndAdd(line2, "div", "bnd-lname", join(nm2, "  ·  ", get(r, "target")))
+        bndButton(line2, "bnd-mini", "+ Add", #(e)[ bndAddPack(b, nm2) ])
+      ]
+    ]
+    @(not(any))[ bndAdd(card, "div", "bnd-note", "Every installed pack is already in this bundle.") ]
+
+    {btns} = bndAdd(card, "div", "bnd-btns", "")
+    bndButton(btns, "btn run", "Switch to this bundle", #(e)[ bndSwitch(b) ])
+    bndButton(btns, "btn", "Duplicate", #(e)[ bndDuplicate(b) ])
+
+    bndAdd(card, "div", "bnd-label", "Share")
+    bndCheck(card, "Include pack code", "so the other person doesn't need the packs installed", bndInclude, #(v)[
+      bndInclude = v
+      bndRender()
+    ])
+    {box} = bndAdd(card, "textarea", "bnd-text", "")
+    box.readOnly = true
+    box.value = bndExportText(b, bndInclude)
+    {sb} = bndAdd(card, "div", "bnd-btns", "")
+    bndButton(sb, "btn", "Copy text", #(e)[
+      box.select()
+      @(exec("copy", false))[ toast("Copied the bundle text.") ][ toast("Select the text and copy it.") ]
+    ])
+    bndButton(sb, "btn", "Export file", #(e)[
+      H.saveFile(join(get(b, "name"), ".bundle.txt"), bndExportText(b, bndInclude))
+      toast("Bundle exported.")
+    ])
+
+    @(eq(bndFresh, get(b, "id")))[
+      bndFresh = ""
+      inp.focus()
+      inp.select()
+    ]
+  ]
+  true
+]
+
+#bndRenderPinned[
+  {rows} = H.packs.all()
+  {data} = bndLoad()
+  {selfs} = bndSelfNames(rows)
+  {card} = bndAdd(bndRoot, "div", "bnd-card", "")
+  bndAdd(card, "div", "bnd-h", "Always on")
+  bndAdd(card, "div", "bnd-note", "Packs ticked here stay on whatever bundle you switch to, like tools you always want. This pack, Bundles, always stays on.")
+  {pins} = get(data, "pinned")
+  {any} = false
+  %(rows, r)[
+    {nm} = get(r, "name")
+    @(not(has(selfs, nm)))[
+      any = true
+      bndCheck(card, nm, get(r, "target"), has(pins, nm), #(v)[
+        @(v)[ @(not(has(pins, nm)))[ push(pins, nm) ] ][ remove(pins, nm) ]
+        bndSave()
+        bndRender()
+      ])
+    ]
+  ]
+  @(not(any))[ bndAdd(card, "div", "bnd-note", "No other packs are installed.") ]
+  true
+]
+
+#bndRenderPaste[
+  {card} = bndAdd(bndRoot, "div", "bnd-card", "")
+  bndAdd(card, "div", "bnd-h", "Paste a bundle")
+  bndAdd(card, "div", "bnd-note", "Paste the text of a bundle someone sent you. Packs that come with it are added but left turned off.")
+  {box} = bndAdd(card, "textarea", "bnd-text", "")
+  box.placeholder = "//@ bundle My bundle"
+  {btns} = bndAdd(card, "div", "bnd-btns", "")
+  bndButton(btns, "btn", "Import text", #(e)[
+    @(size(box.value))[ bndImportText(box.value) ][ toast("Paste a bundle first.") ]
+  ])
+  true
+]
+
+#bndRender[
+  @(bndRoot)[
+    bndRoot.innerHTML = ""
+    @(H)[
+      @(H.packs)[
+        bndRenderList()
+        bndRenderEditor()
+        bndRenderPinned()
+        bndRenderPaste()
+      ][
+        bndAdd(bndAdd(bndRoot, "div", "bnd-card", ""), "div", "bnd-note bnd-bad", "The pack system isn't running, so there is nothing to bundle.")
+      ]
+    ]
+  ]
+  true
+]
+
+// Called when the Bundles tab is opened.
+#bndOpen[
+  bndArmed = ""
+  bndSay("", list())
+  bndRender()
+]
+
+// ---------- building the tab ----------
+#bndInstall[
+  @(not(dom("#bundles")))[
+    {d} = doc()
+    {st} = make("style")
+    st.textContent = bndCss()
+    d.head.appendChild(st)
+
+    {nav} = dom(".views")
+    {tabBtn} = make("button")
+    tabBtn.setAttribute("role", "tab")
+    tabBtn.setAttribute("aria-selected", "false")
+    tabBtn.dataset.view = "bundles"
+    tabBtn.textContent = "Bundles"
+    nav.appendChild(tabBtn)
+    on(tabBtn, "click", #(e)[ later(40, #[ bndOpen() ]) ])
+
+    {pane} = make("section")
+    pane.id = "bundles"
+    pane.className = "audio-pane"
+    pane.setAttribute("aria-label", "Bundles")
+    dom("#main").appendChild(pane)
+
+    {scroll} = bndAdd(pane, "div", "a-scroll", "")
+    bndRoot = bndAdd(scroll, "div", "bnd-wrap", "")
+  ]
+  true
+]
+
+{bndInstalled} = bndInstall()

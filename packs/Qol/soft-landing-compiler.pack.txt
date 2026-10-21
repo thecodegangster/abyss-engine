@@ -1,0 +1,318 @@
+//@ pack Soft Landing (compiler)
+//@ target compiler
+// Makes your game keep running when it reads something that isn't there, and tells you about it.
+//
+//   Without this pack                              With this pack
+//   get(items, 9) on a list with 3 items           gives 0, and a warning says which line did it
+//   reading a variable that doesn't exist          gives 0, and a warning (with "Did you mean ...?")
+//   calling a function that doesn't exist          gives 0, and a warning
+//   ghost = 5, when ghost was never made           makes ghost on the spot, like {ghost} = 5, with no warning
+//
+// The warnings are collected while the game runs, and the same line shows once with a count, so a mistake in
+// #draw doesn't flood anything. The "Soft Landing (UI)" pack shows them in the editor. Without it they are
+// still collected (they are in $K.sl.list in JavaScript), just not shown.
+//
+// Only your game code gets this. The Engine, Compiler, UI, Save and Packer tabs keep their strict errors.
+// It also stays in an exported game, so a finished game keeps running instead of stopping at a small mistake.
+//
+// Things this does NOT soften: get on a map (a missing key still gives nothing, which is how maps are used
+// to check for a key), a missing field like thing.speed, and put. Those never stopped the game before.
+//
+// One more thing is off until you ask for it: when #update or #draw hits any other error (dividing by 0, the
+// wrong kind of value for a function, ...), the game normally stops at it. With "Keep going after other
+// errors" turned on in the Soft Landing (UI) pack, that frame's #update or #draw is skipped, the error shows as
+// a warning and the game carries on. (The switch is the saved setting abyss-engine:softlanding, set to catch.)
+//
+// Dependencies: none. The "Soft Landing (UI)" pack depends on this one.
+// This pack replaces #generator, and adds functions and variables that start with sl.
+// #generator is the part of the compiler that writes the JavaScript. This copy changes only a few places
+// (marked "Soft Landing"), so it should still merge with other compiler packs when stack-a-pack is on.
+
+// The JavaScript that goes at the top of the game. It keeps the warnings in $K.sl. (Single quotes only, so
+// it can sit inside Hash text.)
+#slPrelude[
+  {r} = list()
+  push(r, "$K.sl=(function(){")
+  push(r, "var S={list:[],byKey:Object.create(null),total:0,dropped:0,catchAll:false};")
+  push(r, "try{S.catchAll=localStorage.getItem('abyss-engine:softlanding')==='catch';}catch(_){}")
+  push(r, "S.warn=function(kind,code,msg){")
+  push(r, "S.total++;")
+  push(r, "var k=kind+code,w=S.byKey[k];")
+  push(r, "if(w){w.count++;return;}")
+  push(r, "if(S.list.length>=200){S.dropped++;return;}")
+  push(r, "w={msg:msg,code:code,file:code>=2e6?'game':'engine',line:code>=1e6?code%1e6:0,count:1};")
+  push(r, "S.byKey[k]=w;S.list.push(w);")
+  push(r, "};")
+  push(r, "S.clear=function(){S.list.length=0;S.byKey=Object.create(null);S.total=0;S.dropped=0;};")
+  push(r, "S.v=function(msg,code){S.warn('v',code,msg);return 0;};")
+  push(r, "S.f=function(msg,code){S.warn('f',code,msg);return 0;};")
+  push(r, "S.get=function(l,i,code){")
+  push(r, "if(l===undefined||l===null){S.warn('g',code,'get tried to read item '+String(i)+' of nothing, so it gave 0.');return 0;}")
+  push(r, "if(Array.isArray(l)&&typeof i==='number'){")
+  push(r, "if(i>=0&&i<l.length&&Math.floor(i)===i)return l[i];")
+  push(r, "S.warn('g',code,'The list has '+l.length+' items, so item '+String(i)+' does not exist. It gave 0.');")
+  push(r, "return 0;}")
+  push(r, "return $K.P.get(l,i);")
+  push(r, "};")
+  push(r, "S.caught=function(e,code){")
+  push(r, "if(!S.catchAll)throw e;")
+  push(r, "var c=$K.L>=1e6?$K.L:code;")
+  push(r, "S.warn('e',c,'This hit an error, so it was skipped for this frame: '+String((e&&e.message)||e).split('h_').join(''));")
+  push(r, "return 0;")
+  push(r, "};")
+  push(r, "return S;")
+  push(r, "})();")
+  joinList(r, "\n")
+]
+
+// What to tell the person about a name that isn't there: a hint for words from other languages, a
+// "Did you mean", or how to make it.
+#slNote(name, hints, best)[
+  {note} = join(" Make it first with {", name, "} = ... or #", name, "[ ... ].")
+  @(best)[ note = join(" Did you mean \"", best, "\"?") ]
+  @(has(hints, name))[ note = join(" ", get(hints, name)) ]
+  note
+]
+
+#generator(file, base, uid)[
+  #failAt(msg, nd)[
+    {l} = nd.line
+    {c} = nd.col
+    @(not(l))[ l = 1 ]
+    @(not(c))[ c = 1 ]
+    fail(msg, file, l, c)
+  ]
+
+  #declare(sc, name, kind, nd)[
+    @(has(sc.names, name))[
+      {prev} = get(sc.names, name)
+      @(eq(prev.kind, "game"))[ failAt("\"game\" is a special name in the engine. Pick another name.", nd) ]
+      @(eq(prev.kind, "param"))[ failAt(join("\"", name, "\" is already an input of this function. Pick another name."), nd) ]
+      failAt(join("There's already something called \"", name, "\" here (line ", prev.line, "). To change it, write ", name, " = ... without the { }."), nd)
+    ]
+    put(sc.names, name, info(kind, nd.line))
+  ]
+
+  #suggest(name, sc)[
+    {best} = false
+    {bestD} = 3
+    {limit} = max(1, floor(div(size(name), 3)))
+    %(allNames(sc), n)[
+      {d} = editDistance(name, n)
+      @(and(lt(d, bestD), lte(d, limit)))[
+        best = n
+        bestD = d
+      ]
+    ]
+    best
+  ]
+
+  #unknown(name, sc, nd)[
+    @(has(WORD_HINTS, name))[ failAt(get(WORD_HINTS, name), nd) ]
+    {best} = suggest(name, sc)
+    @(best)[
+      failAt(join("Abyss Engine doesn't know \"", name, "\". Did you mean \"", best, "\"?"), nd)
+    ][
+      failAt(join("Abyss Engine doesn't know \"", name, "\". Make it first with {", name, "} = ... or #", name, "[ ... ]."), nd)
+    ]
+  ]
+
+  #mark(s)[ join("$K.L=", add(base, s.line), ";") ]
+
+  // Soft Landing: only the game tab gets the gentle behavior.
+  #soft[ eq(file, "game") ]
+
+  // Soft Landing: the top of the game gets the warning collector. Everything inside uses bodyCore.
+  #body(stmts, sc, tail)[
+    @(soft())[ join(slPrelude(), "\n", bodyCore(stmts, sc, tail)) ][ bodyCore(stmts, sc, tail) ]
+  ]
+
+  #bodyCore(stmts, sc, tail)[
+    %(stmts, s)[
+      @(eq(s.k, "decl"))[ declare(sc, s.name, "var", s) ]
+      @(eq(s.k, "fn"))[ declare(sc, s.name, "fn", s) ]
+    ]
+    {parts} = list()
+    {lastI} = sub(size(stmts), 1)
+    %(size(stmts), i)[
+      push(parts, stmt(get(stmts, i), sc, and(tail, eq(i, lastI))))
+    ]
+    joinList(parts, "\n")
+  ]
+
+  #fnBody(ps, stmts, sc, nd)[
+    {fs} = scope(sc, "fn")
+    %(ps, p)[ declare(fs, p, "param", nd) ]
+    bodyCore(stmts, fs, true)
+  ]
+
+  #ifCode(s, sc, tail)[
+    {c} = ex(s.cond, sc)
+    {t} = bodyCore(s.then, scope(sc, "block"), tail)
+    {code} = join(mark(s), "if(", c, "){", t, "}")
+    @(s.els)[
+      code = join(code, "else{", bodyCore(s.els, scope(sc, "block"), tail), "}")
+    ]
+    code
+  ]
+
+  #loopCode(s, sc)[
+    {n} = uid.n
+    uid.n = add(n, 1)
+    {over} = ex(s.over, sc)
+    {bs} = scope(sc, "block")
+    @(s.name)[ declare(bs, s.name, "var", s) ]
+    {b} = bodyCore(s.body, bs, false)
+    {vn} = join("$v", n)
+    {it} = join("$i", n)
+    {named} = ""
+    @(s.name)[ named = join("let ", mangle(s.name), "=", vn, ";") ]
+    join(mark(s), "for(const ", it, "=$K.loop(()=>(", over, "));;){const ", vn, "=", it, "();if(", vn, "===$K.END)break;", named, b, "}")
+  ]
+
+  // Soft Landing: ghost = 5 for a name that was never made works like {ghost} = 5 at that spot.
+  // The value is worked out first, so ghost = add(ghost, 1) reads the missing ghost as 0.
+  #implicitDecl(s, sc)[
+    {t} = s.target
+    {v} = ex(s.value, sc)
+    declare(sc, t.name, "var", t)
+    join(mark(s), "let ", mangle(t.name), "=", v, ";")
+  ]
+
+  #assignName(s, sc, found)[
+    {t} = s.target
+    @(not(found))[
+      {best} = suggest(t.name, sc)
+      @(best)[
+        failAt(join("\"", t.name, "\" doesn't exist. Did you mean \"", best, "\"?"), t)
+      ][
+        failAt(join("\"", t.name, "\" doesn't exist yet. To make it, write {", t.name, "} = ..."), t)
+      ]
+    ]
+    @(eq(found.kind, "builtin"))[ failAt(join("\"", t.name, "\" is built into Abyss Engine and can't be changed. Use a different name for your own."), t) ]
+    @(eq(found.kind, "game"))[ failAt("\"game\" can't be changed.", t) ]
+    join(mark(s), mangle(t.name), "=", ex(s.value, sc), ";")
+  ]
+
+  #assignCode(s, sc)[
+    {t} = s.target
+    @(eq(t.k, "id"))[
+      {found} = findName(sc, t.name)
+      @(and(not(found), soft()))[ implicitDecl(s, sc) ][ assignName(s, sc, found) ]
+    ][
+      join(mark(s), ex(t.obj, sc), ".", t.name, "=", ex(s.value, sc), ";")
+    ]
+  ]
+
+  // Soft Landing: #update and #draw at the top of the game can skip a frame instead of stopping the game,
+  // when "Keep going after other errors" is on. When it is off, the error goes on exactly as before.
+  #fnCode(s, sc)[
+    {b} = fnBody(s.params, s.body, sc, s)
+    @(and(soft(), eq(sc.kind, "top"), or(eq(s.name, "update"), eq(s.name, "draw"))))[
+      b = join("try{", b, "}catch($e){return $K.sl.caught($e,", add(base, s.line), ");}")
+    ]
+    join("function ", mangle(s.name), "(", joinList(mangleAll(s.params), ","), "){", b, "}")
+  ]
+
+  #stmt(s, sc, tail)[
+    {k} = s.k
+    @(eq(k, "decl"))[
+      {v} = "undefined"
+      @(s.value)[ v = ex(s.value, sc) ]
+      join(mark(s), "let ", mangle(s.name), "=", v, ";")
+    ][ @(eq(k, "fn"))[
+      fnCode(s, sc)
+    ][ @(eq(k, "if"))[ ifCode(s, sc, tail) ][
+    @(eq(k, "loop"))[ loopCode(s, sc) ][
+    @(eq(k, "assign"))[ assignCode(s, sc) ][
+    @(eq(k, "expr"))[
+      {r} = ""
+      @(tail)[ r = "return " ]
+      join(mark(s), r, ex(s.e, sc), ";")
+    ][
+      ""
+    ]]]]]]
+  ]
+
+  #meFor(sc)[
+    {o} = ownerScope(sc)
+    {names} = list()
+    %(keys(o.names), n)[
+      {kind} = get(o.names, n).kind
+      @(and(neq(kind, "game"), neq(kind, "builtin")))[ push(names, n) ]
+    ]
+    meCode(names)
+  ]
+
+  #plainCall(e, sc)[
+    {f} = ex(e.fn, sc)
+    {args} = list()
+    %(e.args, a)[ push(args, ex(a, sc)) ]
+    join(f, "(", joinList(args, ","), ")")
+  ]
+
+  // Soft Landing: calling a function that doesn't exist gives 0 and a warning.
+  #softCall(e, sc)[
+    {name} = e.fn.name
+    {msg} = join("\"", name, "\" is not a function that exists, so calling it gave 0.", slNote(name, WORD_HINTS, suggest(name, sc)))
+    {parts} = list(quote(msg), add(base, e.line))
+    %(e.args, a)[ push(parts, ex(a, sc)) ]
+    join("$K.sl.f(", joinList(parts, ","), ")")
+  ]
+
+  // Soft Landing: get(list, i) with an i that isn't in the list gives 0 and a warning.
+  #softGet(e, sc)[
+    {a} = ex(get(e.args, 0), sc)
+    {b} = ex(get(e.args, 1), sc)
+    join("$K.sl.get(", a, ",", b, ",", add(base, e.line), ")")
+  ]
+
+  #callCode(e, sc)[
+    {missing} = false
+    {isGet} = false
+    @(and(soft(), eq(e.fn.k, "id")))[
+      {fnd} = findName(sc, e.fn.name)
+      missing = not(fnd)
+      @(and(fnd, eq(e.fn.name, "get"), eq(size(e.args), 2)))[ isGet = eq(fnd.kind, "builtin") ]
+    ]
+    @(missing)[ softCall(e, sc) ][
+      @(isGet)[ softGet(e, sc) ][ plainCall(e, sc) ]
+    ]
+  ]
+
+  #memberCode(e, sc)[
+    {o} = ex(e.obj, sc)
+    @(eq(e.obj.k, "num"))[ o = join("(", o, ")") ]
+    join(o, ".", e.name)
+  ]
+
+  // Soft Landing: a name that doesn't exist reads as 0 and a warning, instead of stopping the build.
+  #softVar(e, sc)[
+    {msg} = join("\"", e.name, "\" does not exist, so it was read as 0.", slNote(e.name, WORD_HINTS, suggest(e.name, sc)))
+    join("$K.sl.v(", quote(msg), ",", add(base, e.line), ")")
+  ]
+
+  #idCode(e, sc)[
+    @(findName(sc, e.name))[ mangle(e.name) ][
+      @(soft())[ softVar(e, sc) ][ unknown(e.name, sc, e) ]
+    ]
+  ]
+
+  #ex(e, sc)[
+    {k} = e.k
+    @(eq(k, "num"))[ numberCode(e.v) ][
+    @(eq(k, "str"))[ quote(e.v) ][
+    @(eq(k, "bool"))[ @(e.v)[ "true" ][ "false" ] ][
+    @(eq(k, "id"))[
+      idCode(e, sc)
+    ][ @(eq(k, "me"))[ meFor(sc) ][
+    @(eq(k, "lambda"))[
+      join("((", joinList(mangleAll(e.params), ","), ")=>{", fnBody(e.params, e.body, sc, e), "})")
+    ][ @(eq(k, "member"))[ memberCode(e, sc) ][
+    @(eq(k, "call"))[ callCode(e, sc) ][
+      "undefined"
+    ]]]]]]]]
+  ]
+
+  me
+]
